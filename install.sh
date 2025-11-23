@@ -4,68 +4,72 @@
 
 set -e
 
-if [ "$EUID" -ne 0 ]; then
-  echo "❌ Please run as root (sudo ./install.sh)"
-  exit 1
-fi
-
-echo "🚀 Installing udwall..."
-
-# 1. Check dependencies
-echo "🔍 Checking dependencies..."
-
-if ! command -v python3 &> /dev/null; then
-    echo "❌ Error: Python 3 is not installed."
-    echo "ℹ️  Please install Python 3 and try again (e.g., 'sudo apt install python3')."
-    exit 1
-fi
-
-if ! command -v ufw &> /dev/null; then
-    echo "❌ Error: UFW is not installed."
-    echo "ℹ️  Please install UFW and try again (e.g., 'sudo apt install ufw')."
-    exit 1
-fi
-
-echo "✅ Dependencies found."
-
-# 2. Download and Install
-echo "⬇️  Downloading udwall..."
-
-# Ensure curl is installed
-if ! command -v curl &> /dev/null; then
-    echo "❌ Error: curl is not installed."
-    echo "ℹ️  Please install curl and try again."
-    exit 1
-fi
-
 REPO_URL="https://raw.githubusercontent.com/Hexmos/udwall/main"
 INSTALL_PATH="/usr/local/bin/udwall"
-
-# Download udwall directly to /usr/local/bin/udwall
-if ! curl -fsSL "$REPO_URL/udwall" -o "$INSTALL_PATH"; then
-    echo "❌ Error: Failed to download udwall from GitHub."
-    echo "ℹ️  Please check your internet connection or if the repository/file exists."
-    exit 1
-fi
-
-# Make executable
-echo "🔑 Setting permissions..."
-chmod +x "$INSTALL_PATH"
-
-# 3. Setup global config
 CONFIG_DIR="/etc/udwall"
 CONFIG_FILE="$CONFIG_DIR/udwall.conf"
 
-if [ ! -f "$CONFIG_FILE" ]; then
-    echo "⚙️  Setting up default configuration at $CONFIG_FILE"
-    mkdir -p "$CONFIG_DIR"
-    # Download default config
-    if ! curl -fsSL "$REPO_URL/udwall.conf" -o "$CONFIG_FILE"; then
-         echo "⚠️  Warning: Failed to download default config. You may need to create one manually."
+check_root() {
+    if [ "$EUID" -ne 0 ]; then
+        echo "❌ Please run as root (sudo ./install.sh)"
+        exit 1
     fi
-else
-    echo "⚠️  Configuration file already exists at $CONFIG_FILE. Skipping overwrite."
-fi
+}
 
-echo "✅ Installation complete!"
-echo "Run 'sudo udwall --help' to get started."
+check_dependencies() {
+    echo "🔍 Checking dependencies..."
+    local dependencies=("python3" "ufw" "curl")
+    local missing=0
+
+    for dep in "${dependencies[@]}"; do
+        if ! command -v "$dep" &> /dev/null; then
+            echo "❌ Error: $dep is not installed."
+            echo "ℹ️  Please install $dep and try again."
+            missing=1
+        fi
+    done
+
+    if [ $missing -eq 1 ]; then
+        exit 1
+    fi
+    echo "✅ Dependencies found."
+}
+
+fetch_script() {
+    echo "⬇️  Downloading udwall..."
+    # Download udwall directly to /usr/local/bin/udwall
+    if ! curl -fsSL "$REPO_URL/udwall" -o "$INSTALL_PATH"; then
+        echo "❌ Error: Failed to download udwall from GitHub."
+        echo "ℹ️  Please check your internet connection or if the repository/file exists."
+        exit 1
+    fi
+
+    # Make executable
+    echo "🔑 Setting permissions..."
+    chmod +x "$INSTALL_PATH"
+}
+
+setup_config() {
+    if [ ! -f "$CONFIG_FILE" ]; then
+        echo "⚙️  Setting up default configuration at $CONFIG_FILE"
+        mkdir -p "$CONFIG_DIR"
+        # Download default config
+        if ! curl -fsSL "$REPO_URL/udwall.conf" -o "$CONFIG_FILE"; then
+             echo "⚠️  Warning: Failed to download default config. You may need to create one manually."
+        fi
+    else
+        echo "⚠️  Configuration file already exists at $CONFIG_FILE. Skipping overwrite."
+    fi
+}
+
+main() {
+    echo "🚀 Installing udwall..."
+    check_root
+    check_dependencies
+    fetch_script
+    setup_config
+    echo "✅ Installation complete!"
+    echo "Run 'sudo udwall --help' to get started."
+}
+
+main
