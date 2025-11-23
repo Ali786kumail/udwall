@@ -2,7 +2,7 @@
 
 `udwall` is a declarative tool to manage UFW and Docker firewall rules using a single Python configuration file. It fixes the Docker security flaw where containers bypass UFW, and it automates rule management so you never have to run manual `ufw allow` commands again.
 
-## 1. What is the problem?
+## What is the problem?
 
 UFW is a popular iptables front end on Ubuntu that makes it easy to manage firewall rules. But when Docker is installed, **Docker bypasses the UFW rules**, and published ports can be accessed from outside.
 
@@ -23,7 +23,7 @@ The issue is detailed as follows (Source: [ufw-docker/problem](https://github.co
     *   [v2ex.com](https://www.v2ex.com/amp/t/466666)
     *   [blog.36web.rocks](https://blog.36web.rocks/2016/07/08/docker-behind-ufw.html)
 
-## 2. The Previous Solution: ufw-docker
+## The Previous Solution: ufw-docker
 
 The tool `ufw-docker` solved these issues but had a few drawbacks:
 
@@ -38,7 +38,7 @@ The tool `ufw-docker` solved these issues but had a few drawbacks:
 2.  **Prerequisites:** It required downloading a script to `/usr/local/bin` and running it with sudo.
 3.  **Mechanism:** It modified the `/etc/ufw/after.rules` file to add a custom `DOCKER-USER` chain that correctly filters traffic destined for Docker containers, ensuring UFW rules are respected. (See [ufw-docker README](https://github.com/chaifeng/ufw-docker/blob/master/README.md#how-to-do) for details).
 
-## 3. The Solution: udwall
+## The Solution: udwall
 
 **udwall** is a declarative tool to manage UFW and Docker firewall rules using a single configuration file.
 
@@ -48,7 +48,7 @@ The tool `ufw-docker` solved these issues but had a few drawbacks:
 4.  **True Synchronization:** `udwall` performs atomic updates, removing old unused rules and applying new ones automatically.
 5.  **Safety First:** Automatically backs up `/etc/ufw` and `iptables` before every change.
 
-## 4. Installation
+## Installation
 
 You can install `udwall` with a single command:
 
@@ -61,11 +61,11 @@ This script will:
 - Download `udwall` to `/usr/local/bin/udwall`.
 - Set up a default configuration at `/etc/udwall/udwall.conf`.
 
-## 5. Usage
+## Usage
 
 **Note:** `udwall` requires `sudo` privileges.
 
-### 1. Fix the Docker Flaw & Enable UFW
+### Fix the Docker Flaw & Enable UFW
 
 This sets up the `iptables` rules required to make Docker respect UFW.
 
@@ -73,7 +73,7 @@ This sets up the `iptables` rules required to make Docker respect UFW.
 sudo udwall --enable
 ```
 
-### 2. Define your Rules
+### Define your Rules
 
 Edit the configuration file at `/etc/udwall/udwall.conf` (or `udwall.conf` in the current directory).
 
@@ -96,7 +96,7 @@ rules = [
 ]
 ```
 
-### 3. Apply the Configuration
+### Apply the Configuration
 
 This will backup your current state, remove undefined rules, and apply the new ones.
 
@@ -104,7 +104,7 @@ This will backup your current state, remove undefined rules, and apply the new o
 sudo udwall --apply
 ```
 
-### 4. Other Commands
+### Other Commands
 
 | Command | Description |
 | :--- | :--- |
