@@ -54,7 +54,7 @@ setup_config() {
         echo "⚙️  Setting up default configuration at $CONFIG_FILE"
         mkdir -p "$CONFIG_DIR"
         # Download default config
-        if ! curl -fsSL "$REPO_URL/udwall.conf" -o "$CONFIG_FILE"; then
+        if ! curl -fsSL "$REPO_URL/udwall.conf.example" -o "$CONFIG_FILE"; then
              echo "⚠️  Warning: Failed to download default config. You may need to create one manually."
         fi
     else

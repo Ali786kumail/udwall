@@ -9,7 +9,7 @@ import shlex
 import re
 import logging
 
-__version__ = "0.0.2"
+__version__ = "0.0.3"
 
 AFTER_RULES_PATH = "/etc/ufw/after.rules"
 AFTER6_RULES_PATH = "/etc/ufw/after6.rules"
@@ -1223,7 +1223,7 @@ def main():
     if os.geteuid() != 0:
         script_name = os.path.basename(sys.argv[0])
         print(f"❌ ERROR: You need to be root to run this script", file=sys.stderr)
-        print(f"ℹ️  INFO: Use `sudo python3 {script_name} <command>`", file=sys.stderr)
+        print(f"ℹ️  INFO: Use `sudo {script_name} <command>`", file=sys.stderr)
         sys.exit(1)
 
     # Create a custom formatter to handle different log levels differently
