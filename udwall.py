@@ -1,0 +1,1258 @@
+import argparse
+import subprocess
+import sys
+import os
+import datetime
+import shutil
+import shlex 
+import re
+import logging
+
+AFTER_RULES_PATH = "/etc/ufw/after.rules"
+AFTER6_RULES_PATH = "/etc/ufw/after6.rules"
+
+DOCKER_UFW_BLOCK = """
+# BEGIN UFW AND DOCKER
+*filter
+:ufw-user-forward - [0:0]
+:ufw-docker-logging-deny - [0:0]
+:DOCKER-USER - [0:0]
+-A DOCKER-USER -j ufw-user-forward
+
+-A DOCKER-USER -j RETURN -s 10.0.0.0/8
+-A DOCKER-USER -j RETURN -s 172.16.0.0/12
+-A DOCKER-USER -j RETURN -s 192.168.0.0/16
+
+-A DOCKER-USER -p udp -m udp --sport 53 --dport 1024:65535 -j RETURN
+
+-A DOCKER-USER -j ufw-docker-logging-deny -p tcp -m tcp --tcp-flags FIN,SYN,RST,ACK SYN -d 192.168.0.0/16
+-A DOCKER-USER -j ufw-docker-logging-deny -p tcp -m tcp --tcp-flags FIN,SYN,RST,ACK SYN -d 10.0.0.0/8
+-A DOCKER-USER -j ufw-docker-logging-deny -p tcp -m tcp --tcp-flags FIN,SYN,RST,ACK SYN -d 172.16.0.0/12
+-A DOCKER-USER -j ufw-docker-logging-deny -p udp -m udp --dport 0:32767 -d 192.168.0.0/16
+-A DOCKER-USER -j ufw-docker-logging-deny -p udp -m udp --dport 0:32767 -d 10.0.0.0/8
+-A DOCKER-USER -j ufw-docker-logging-deny -p udp -m udp --dport 0:32767 -d 172.16.0.0/12
+
+-A DOCKER-USER -j RETURN
+
+-A ufw-docker-logging-deny -m limit --limit 3/min --limit-burst 10 -j LOG --log-prefix "[UFW DOCKER BLOCK] "
+-A ufw-docker-logging-deny -j DROP
+
+COMMIT
+# END UFW AND DOCKER
+"""
+
+DOCKER_UFW6_BLOCK = """
+# BEGIN UFW AND DOCKER
+*filter
+:ufw6-user-forward - [0:0]
+:ufw6-docker-logging-deny - [0:0]
+:DOCKER-USER - [0:0]
+-A DOCKER-USER -j ufw6-user-forward
+
+-A DOCKER-USER -j RETURN -s fd00::/8
+-A DOCKER-USER -p udp -m udp --sport 53 --dport 1024:65535 -j RETURN
+-A DOCKER-USER -j ufw6-docker-logging-deny -p tcp -m tcp --tcp-flags FIN,SYN,RST,ACK SYN -d fd00::/8
+-A DOCKER-USER -j ufw6-docker-logging-deny -p udp -m udp --dport 0:32767 -d fd00::/8
+
+-A DOCKER-USER -j RETURN
+
+-A ufw6-docker-logging-deny -m limit --limit 3/min --limit-burst 10 -j LOG --log-prefix "[UFW DOCKER BLOCK] "
+-A ufw6-docker-logging-deny -j DROP
+
+COMMIT
+# END UFW AND DOCKER
+"""
+
+
+def run_command(command_list, description, ignore_errors_containing=None):
+    """
+    Executes a shell command, logs its progress, and handles outcomes.
+
+    This is a robust wrapper around `subprocess.run` that provides
+    consistent logging for command execution. It captures stdout and stderr,
+    checks the return code, and prints formatted output for success or failure.
+    It also includes an idempotency check to ignore specific, expected errors.
+
+    Args:
+        command_list (list): The command and its arguments as a list of strings.
+        description (str): A human-readable description of the command's purpose.
+        ignore_errors_containing (str, optional): A substring to look for in
+            stderr. If found on a non-zero exit, the error is ignored, and the
+            function returns True. Defaults to None.
+
+    Returns:
+        bool: True if the command succeeded or the error was ignored, False otherwise.
+    """
+    # Use shlex.join for a more accurate representation of the command,
+    # though ' '.join is fine for simple logging.
+    try:
+        log_cmd = ' '.join(command_list)
+    except TypeError:
+        log_cmd = str(command_list) # Fallback
+        
+    logging.info(f"Executing: {description} ({log_cmd})")
+    try:
+        # Execute the command
+        # check=False to handle errors manually
+        result = subprocess.run(command_list, capture_output=True, text=True, check=False) 
+        
+        if result.returncode == 0:
+            logging.info(f"Successfully executed: {description}")
+            if result.stdout:
+                logging.info(f"Output:\n{result.stdout.strip()}")
+            return True
+        else:
+            # --- IDEMPOTENCY CHECK ---
+            # If we get an error, check if it's one we expect to ignore.
+            # This allows for a single string or a list of strings.
+            if ignore_errors_containing:
+                errors_to_ignore = [ignore_errors_containing] if isinstance(ignore_errors_containing, str) else ignore_errors_containing
+                for error_string in errors_to_ignore:
+                    if error_string in result.stderr:
+                        logging.warning(f"Ignoring known error (idempotency): {description} failed because it's already done.")
+                        logging.warning(f"Details: {result.stderr.strip()}")
+                        return True # This is a "success"
+
+
+            # --- REAL ERROR ---
+            logging.error(f"Error executing: {description}")
+            logging.error(f"Return code: {result.returncode}")
+            if result.stderr:
+                logging.error(f"Error details:\n{result.stderr.strip()}")
+            
+            # Check for common permission errors (already handled by main())
+            if 'Permission denied' in result.stderr or 'administrat' in result.stderr:
+                 print("\nHint: This command requires elevated (sudo) privileges.", file=sys.stderr)
+            return False
+            
+    except FileNotFoundError:
+        logging.error(f"Command '{command_list[0]}' not found. Is it installed and in your PATH?")
+        return False
+    except Exception as e:
+        logging.critical(f"An unexpected error occurred while running {log_cmd}: {e}")
+        return False
+
+def check_ufw_installed():
+    """
+    Verifies if the UFW package is installed and exits if it's not.
+
+    Uses `dpkg -l` to check for the presence of the 'ufw' package. This is
+    a non-invasive check. If UFW is not found, it prints a helpful error
+    message and terminates the script.
+    """
+    try:
+        subprocess.run(
+            ["dpkg", "-l", "ufw"], 
+            check=True, 
+            stdout=subprocess.DEVNULL, 
+            stderr=subprocess.DEVNULL
+        )
+    except subprocess.CalledProcessError:
+        print("❌ ERROR: Couldn't detect ufw", file=sys.stderr)
+        print("ℹ️  INFO: Install `ufw` `sudo apt install ufw`", file=sys.stderr)
+        sys.exit(1)
+
+def load_rules_from_file():
+    """
+    Reads and parses the 'udwall.conf' file to load firewall rules.
+
+    This function locates 'udwall.conf' in the current directory, reads its
+    content, and uses `exec()` to interpret it as Python code. It expects the
+    file to define a single variable, `rules`, which should be a list of rule
+    dictionaries.
+
+    If the file is not found or a parsing error occurs, the script will print
+    an error message and exit.
+
+    Returns:
+        list: The list of rule dictionaries loaded from the configuration file.
+    """
+    file_path = 'udwall.conf'
+    if not os.path.exists(file_path):
+        script_name = os.path.basename(sys.argv[0])
+        # Use print to stderr for this specific, user-facing error message
+        print(f"❌ ERROR: {file_path} not found.", file=sys.stderr)
+        print(f"ℹ️  INFO: You can create one from your current UFW rules by running `sudo python3 {script_name} --create`", file=sys.stderr)
+        sys.exit(1)
+
+    try:
+        config_context = {}
+        with open(file_path, "r") as f:
+            exec(f.read(), config_context)
+        return config_context['rules']
+    except Exception as e:
+        logging.error(f"Error parsing {file_path}: {e}")
+        sys.exit(1)
+
+def reload_ufw():
+    """
+    Reloads UFW to apply any pending changes to the firewall rules.
+
+    This function executes `sudo ufw reload`. It's typically called after
+    rule files have been modified to make the changes live. It wraps the
+    execution in the `run_command` helper for consistent logging.
+    """
+    logging.info("\nReloading UFW rules...")
+    reload_command = ['sudo', 'ufw', 'reload']
+    if not run_command(reload_command, "Reload UFW rules"):
+        logging.error("\n'ufw reload' failed.")
+        logging.error("Your rules files may have been changed, but the reload failed.")
+
+# --- UTILITY & HELPER FUNCTIONS ---
+
+
+def enable_ufw():
+    """
+    Ensures UFW is properly enabled and configured for basic access.
+
+    This function performs a sequence of checks and actions:
+    1.  Checks the current status of UFW.
+    2.  Idempotently adds an 'allow ssh' rule to prevent accidental lockouts.
+    3.  If UFW is found to be inactive, it executes `sudo ufw enable`, which
+        will prompt the user for confirmation via the console.
+
+    The script will exit if any of these steps fail, as a functioning UFW
+    is critical for subsequent operations.
+    """
+    # --- 1. Check UFW Status ---
+    status_command = ['sudo', 'ufw', 'status']
+    try:
+        logging.info(f"Checking UFW status with: {' '.join(status_command)}")
+        result = subprocess.run(
+            status_command, 
+            check=True, 
+            capture_output=True, 
+            text=True
+        )
+        
+        # --- 2. Allow SSH (Ensures rule exists) ---
+        allow_ssh_command = ['sudo', 'ufw', 'allow', 'ssh']
+        logging.info(f"Ensuring SSH rule exists: {' '.join(allow_ssh_command)}")
+        subprocess.run(allow_ssh_command, check=True)
+        logging.info("Successfully ensured 'allow ssh' rule.")
+
+        # --- 3. Enable UFW if needed ---
+        if "Status: inactive" in result.stdout:
+            logging.info("UFW is inactive. Enabling it...")
+            enable_ufw_command = ['sudo', 'ufw', 'enable']
+            logging.info(f"Enabling UFW: {' '.join(enable_ufw_command)}")
+            logging.info("This will prompt you to confirm. Type 'y' and press Enter.")
+            # This subprocess call will wait for user input (y/N)
+            subprocess.run(enable_ufw_command, check=True)
+            logging.info("UFW is now enabled.")
+        else:
+            logging.info("UFW is already active. Proceeding...")
+
+    except subprocess.CalledProcessError as e:
+        logging.error(f"\nError checking/enabling UFW (command failed): {e}")
+        logging.error("Please resolve the UFW issue and try again.")
+        sys.exit(1)
+    except FileNotFoundError:
+        logging.error("'sudo' or 'ufw' command not found.")
+        logging.error("Please ensure UFW is installed.")
+        sys.exit(1)
+    except Exception as e:
+        logging.critical(f"An unexpected error occurred while enabling UFW: {e}")
+        sys.exit(1)
+    
+    # Return True if UFW is active at the end of the function
+    status_result = subprocess.run(['sudo', 'ufw', 'status'], capture_output=True, text=True)
+    return "Status: active" in status_result.stdout
+
+def ensure_docker_rules_in_file(rules_file_path, rules_block):
+    """
+    Ensures the Docker-specific iptables rules are present in a given UFW rules file.
+
+    This function is critical for fixing the security issue where Docker bypasses UFW.
+    It checks if the `DOCKER_UFW_BLOCK` is present in the specified file (e.g., after.rules).
+
+    If the block is missing, it inserts it just before the final 'COMMIT' line of the `*filter`
+    table. This is more robust than appending. The check is idempotent.
+
+    Returns:
+        tuple: A tuple (bool, str) indicating:
+               - success (bool): True if the configuration is correct, False otherwise.
+               - status (str): "present", "added", or "failed".
+    """
+    logging.info(f"Checking {rules_file_path} for Docker configuration...")
+    try:
+        with open(rules_file_path, 'r') as f:
+            lines = f.readlines()
+    except FileNotFoundError:
+        logging.warning(f"File {rules_file_path} not found. Skipping.")
+        return (True, "not_present") # Not a failure, file might not exist (e.g. ipv6 disabled)
+    except Exception as e:
+        logging.error(f"Error reading {rules_file_path}: {e}")
+        return (False, "failed")
+
+    # Idempotency Check
+    if any("# BEGIN UFW AND DOCKER" in line for line in lines):
+        logging.info(f"Docker configuration already exists in {rules_file_path}. Skipping.")
+        return (True, "present")
+
+    logging.info(f"Docker configuration not found. Inserting into {rules_file_path}...")
+
+    # Find the last COMMIT line for the *filter table
+    insert_pos = -1
+    in_filter_table = False
+    for i, line in enumerate(lines):
+        if line.strip() == '*filter':
+            in_filter_table = True
+        if in_filter_table and line.strip().upper() == 'COMMIT':
+            insert_pos = i
+            # We take the last one we find in the filter table
+
+    if insert_pos == -1:
+        logging.error(f"Could not find a `COMMIT` line in the `*filter` table of {rules_file_path}. Cannot insert rules.")
+        return (False, "failed")
+
+    # Insert the block right after the COMMIT line
+    new_lines = lines[:insert_pos + 1] + ['\n'] + [rules_block] + lines[insert_pos + 1:]
+
+    try:
+        # Write back to the file using a temporary file for safety
+        temp_file_path = f"{rules_file_path}.tmp"
+        with open(temp_file_path, 'w') as f:
+            f.writelines(new_lines)
+        shutil.move(temp_file_path, rules_file_path) # This needs sudo, which we have
+        logging.info(f"Successfully inserted Docker block into {rules_file_path}.")
+        return (True, "added")
+    except Exception as e:
+        logging.error(f"Error writing to {rules_file_path}: {e}")
+        return (False, "failed")
+
+def generate_ufw_command(rule):
+    """
+    Constructs a UFW command string from a structured rule dictionary.
+
+    This function translates a Python dictionary representing a firewall rule
+    into a valid `sudo ufw ...` command string. It handles various rule
+    attributes, including source IP, port/service, protocol, and Docker
+    forwarding.
+
+    Args:
+        rule (dict): A dictionary describing the rule. Expected keys include:
+            'from' (str): The source IP or 'any'.
+            'connectionType' (str): 'tcp' or 'udp'.
+            'to' (str or int): The destination port, range, or service name.
+            'isDockerServed' (bool): True if it's a Docker 'route' rule.
+            'isEnabled' (bool): True to generate an 'allow' command, False
+                                for a 'delete allow' command.
+    Returns:
+        str: The fully formed `sudo ufw` command string.
+    """
+    src = rule.get("from")
+    proto = rule.get("connectionType")
+    port = rule.get("to")
+    is_docker = rule.get("isDockerServed")
+    is_enabled = rule.get("isEnabled")
+    
+    action = "allow" if is_enabled else "delete allow"
+
+    cmd = ""
+    if is_docker:
+        cmd = f"ufw route {action} from {src} to any port {port} proto {proto}"
+    else:
+        if src.lower() == "any":
+            # Correctly format the port/protocol part
+            port_spec = ""
+            if isinstance(port, int) or ':' in str(port):
+                # For numbers (80) or ranges ('60000:61000'), use port/proto
+                port_spec = f"{port}/{proto}"
+            else:
+                # For service names ('OpenSSH'), just use the name
+                port_spec = f"{port}"
+
+            if is_enabled:
+                cmd = f"ufw allow {port_spec}"
+            else:
+                cmd = f"ufw delete allow {port_spec}"
+        else:
+            cmd = f"ufw {action} from {src} to any port {port} proto {proto}"
+    
+    return f"sudo {cmd}"
+
+# --- DISABLE-SPECIFIC HELPER FUNCTIONS ---
+
+
+
+
+def dry_run_rules():
+    """
+    Loads rules from udwall.conf and prints the corresponding UFW commands.
+
+    This function provides a "dry run" mode. It loads the rule set, generates
+    the command for each rule using `generate_ufw_command`, and prints it to
+    the console without executing it. This is useful for debugging and verification.
+    """
+    logging.info("--- Loading udwall.conf ---")
+    rules = load_rules_from_file()
+    logging.info(f"Found {len(rules)} rules to process.\n")
+    logging.info("\n--- DRY RUN MODE: No changes will be made ---")
+
+    for i, rule in enumerate(rules, 1):
+        command_str = generate_ufw_command(rule)
+        status = "[ENABLED] " if rule.get("isEnabled") else "[DISABLED]"
+        logging.info(f"Rule #{i} {status}: {command_str}")
+
+
+def fetch_after_rules(rules_file_path):
+    """
+    Reads a UFW rules file and extracts the 'UFW AND DOCKER' block.
+
+    Args:
+        rules_file_path (str): The absolute path to the rules file (e.g.,
+            '/etc/ufw/after.rules').
+
+    Returns:
+        tuple: A tuple containing:
+        - block_lines (list): The lines of text from *inside* the block.
+        - all_file_lines (list): *All* lines from the original file as a list
+          of strings.
+        - found_block (bool): True if the start/end markers were found.
+        Returns (None, None, False) on a critical read error.
+    """
+    start_marker = '# BEGIN UFW AND DOCKER'
+    end_marker = '# END UFW AND DOCKER'
+    
+    try:
+        with open(rules_file_path, 'r') as f:
+            all_file_lines = f.readlines()
+    except FileNotFoundError:
+        # This is not an error, the file just might not exist (e.g., ipv6)
+        logging.info(f"Rules file '{rules_file_path}' not found. Skipping.")
+        return ([], [], False) # (empty block, empty file, not found)
+    except Exception as e:
+        logging.error(f"Error reading {rules_file_path}: {e}")
+        return (None, None, False) # Signal a critical error
+
+    block_lines = []
+    in_block = False
+    found_block = False
+
+    for line in all_file_lines:
+        if start_marker in line:
+            in_block = True
+            found_block = True
+            continue
+        if end_marker in line:
+            in_block = False
+            continue
+        if in_block:
+            block_lines.append(line)
+    
+    if not found_block:
+        logging.info(f"Did not find a ufw-docker block in {rules_file_path}.")
+
+    return (block_lines, all_file_lines, found_block)
+
+def parse_ufw_docker_rules(block_lines):
+    """
+    Parses iptables rules from a 'UFW AND DOCKER' block.
+
+    This function processes the raw text lines from within a `ufw-docker` block
+    and extracts two types of information: iptables rules to be deleted (`-A`)
+    and custom chains to be flushed and deleted (`:`).
+
+    Args:
+        block_lines (list): The lines of text from *inside* the block.
+
+    Returns:
+        tuple: A tuple containing (rules_to_delete, chains_to_delete).
+    """
+    rules_to_delete = [] # e.g., ('DOCKER-USER', ['-j', 'ufw-user-forward', ...])
+    chains_to_delete = [] # e.g., 'ufw-user-forward'
+    
+    for line in block_lines:
+        stripped = line.strip()
+        
+        # Skip comments, empty lines, and filter keywords
+        if not stripped or stripped.startswith('#') or stripped.startswith('*') or stripped.upper() == 'COMMIT':
+            continue
+            
+        if stripped.startswith(':'):
+            # This is a chain definition, e.g., ":ufw-user-forward - [0:0]"
+            # Don't delete :DOCKER-USER (it's a built-in docker chain)
+            if not stripped.startswith(':DOCKER-USER'):
+                chain_name = stripped.split()[0].lstrip(':')
+                if chain_name not in chains_to_delete:
+                    chains_to_delete.append(chain_name)
+        
+        elif stripped.startswith('-A'):
+            # This is a rule, e.g., "-A DOCKER-USER -j ufw-user-forward"
+            parts = stripped.split(None, 2)
+            if len(parts) >= 3:
+                # parts[0] is '-A', parts[1] is chain_name, parts[2] is rule_spec_string
+                chain_name = parts[1]
+                rule_spec_string = parts[2]
+                
+                try:
+                    # Use shlex.split to handle quotes and other shell syntax
+                    rule_spec_list = shlex.split(rule_spec_string)
+                    rules_to_delete.append((chain_name, rule_spec_list))
+                except ValueError as e:
+                    logging.warning(f"Could not parse rule: {stripped}")
+                    logging.error(f"{e}")
+                
+    return rules_to_delete, chains_to_delete
+
+def remove_ufw_docker_iptable_rules(rules_to_delete, chains_to_delete, iptables_command):
+    """
+    Removes live iptables rules and chains related to the ufw-docker integration.
+
+    This function systematically removes the live firewall configuration by:
+    1. Deleting each rule (`-D`) from its respective chain.
+    2. Flushing all custom chains (`-F`).
+    3. Deleting all custom chains (`-X`).
+
+    It uses `ignore_errors_containing` to make the operations idempotent,
+    meaning it won't fail if a rule or chain has already been removed.
+
+    Returns:
+        bool: True if all commands succeeded or were ignored idempotently,
+              False if any unexpected error occurred.
+    """
+    all_successful = True
+    
+    logging.info("\n--- Step 1: Deleting specific rules from config block... ---")
+    for chain, rule_spec_list in rules_to_delete:
+        cmd = [iptables_command, '-D', chain] + rule_spec_list
+        desc = f"Delete rule: {chain} {' '.join(rule_spec_list)}"
+        # Add "No chain/target/match" to the list of ignorable errors. This happens
+        # when we pre-emptively delete a rule that is also in the main list.
+        delete_errors_to_ignore = ["No such rule", "No chain/target/match by that name."]
+        if not run_command(cmd, desc, ignore_errors_containing=delete_errors_to_ignore):
+            all_successful = False
+
+    # --- Step 2: Delete the main UFW forward jump rule ---
+    # This is a default UFW rule that also links to our chain. It must be deleted before the chain can be removed.
+    logging.info("\n--- Step 2: Deleting main UFW forward jump rule... ---")
+    main_forward_chain = "ufw-forward" if iptables_command == "iptables" else "ufw6-forward"
+    user_forward_chain = "ufw-user-forward" if iptables_command == "iptables" else "ufw6-user-forward"
+    errors_to_ignore = ["No such rule", "Bad rule"]
+    jump_rule_cmd = [iptables_command, '-D', main_forward_chain, '-j', user_forward_chain]
+    jump_rule_desc = f"Delete main jump rule: {main_forward_chain} -> {user_forward_chain}"
+    if not run_command(jump_rule_cmd, jump_rule_desc, ignore_errors_containing=errors_to_ignore):
+        # This is a critical step, but if it fails idempotently, it's not a true failure of the overall process.
+        # The `all_successful` flag is now more about whether a REAL error occurred.
+        pass
+
+    logging.info("\n--- Step 3: Flushing and deleting custom chains... ---")
+    for chain in chains_to_delete:
+        if not run_command([iptables_command, '-F', chain], f"Flush chain: {chain}", ignore_errors_containing="No such chain"):
+            all_successful = False
+        # Treat "Too many links" as a warning, not a failure. The important rules are already gone.
+        delete_chain_errors = ["No such chain", "Too many links"]
+        if not run_command([iptables_command, '-X', chain], f"Delete chain: {chain}", ignore_errors_containing=delete_chain_errors):
+            all_successful = False
+
+    return all_successful
+
+def remove_after_rules(rules_file_path, all_file_lines, found_block):
+    """
+    Removes the 'UFW AND DOCKER' block from a given UFW rules file.
+
+    This function takes the original content of a rules file and writes it
+    back without the `ufw-docker` block, effectively cleaning the file.
+
+    Args:
+        rules_file_path (str): The path to the file to modify.
+        all_file_lines (list): The original content of the file, as a list of lines.
+        found_block (bool): A boolean indicating if the block was found in the
+                            first place. If False, the function does nothing.
+    """
+    logging.info(f"\n--- Cleaning {rules_file_path}... ---")
+    if not found_block:
+        logging.info(f"Block was not found, no cleaning needed for {rules_file_path}.")
+        return True
+
+    lines_to_keep = []
+    in_block = False
+    for line in all_file_lines:
+        if '# BEGIN UFW AND DOCKER' in line:
+            in_block = True
+        elif '# END UFW AND DOCKER' in line:
+            in_block = False
+        elif not in_block:
+            lines_to_keep.append(line)
+            
+    try:
+        with open(rules_file_path, 'w') as f:
+            f.writelines(lines_to_keep)
+        logging.info(f"Successfully removed block from {rules_file_path}.")
+        return True
+    except Exception as e:
+        logging.error(f"Error writing to {rules_file_path}: {e}")
+        return False
+
+def process_uninstall_idempotent(rules_file_path, iptables_command):
+    """
+    Orchestrates the removal of ufw-docker rules for one protocol.
+
+    This function combines fetching, parsing, live rule removal, and file
+    cleaning into a single, idempotent operation for either IPv4 or IPv6.
+
+    Args:
+        rules_file_path (str): Path to the rules file (e.g., after.rules).
+        iptables_command (str): The command to use ('iptables' or 'ip6tables').
+    Returns:
+        str: A status string: 'removed', 'not_present', or 'failed'.
+    """
+    logging.info(f"Processing disable for: {rules_file_path} (using {iptables_command})")
+    
+    block_lines, all_lines, found_block = fetch_after_rules(rules_file_path)
+    if block_lines is None: 
+        return 'failed' # Critical read error
+
+    # If the block wasn't there to begin with, we can stop.
+    if not found_block:
+        logging.info(f"Docker block not found in {rules_file_path}. No action needed.")
+        return 'not_present'
+
+    rules_to_delete, chains_to_delete = parse_ufw_docker_rules(block_lines)
+    
+    rules_removed_ok = remove_ufw_docker_iptable_rules(rules_to_delete, chains_to_delete, iptables_command)
+    file_cleaned_ok = remove_after_rules(rules_file_path, all_lines, found_block)
+
+    if rules_removed_ok and file_cleaned_ok:
+        return 'removed'
+    else:
+        return 'failed'
+
+def check_block_presence(rules_file_path):
+    """
+    A simple, read-only check to see if the Docker block is in a rules file.
+    This is used for a reliable final summary without affecting logic.
+
+    Returns:
+        str: 'present' or 'not_present'.
+    """
+    try:
+        with open(rules_file_path, 'r') as f:
+            content = f.read()
+        if '# BEGIN UFW AND DOCKER' in content:
+            return 'present'
+        else:
+            return 'not_present'
+    except FileNotFoundError:
+        return 'not_present'
+    except Exception:
+        # If we can't read it, we can't determine presence.
+        return 'unknown'
+
+# --- CORE ACTION FUNCTIONS (Called by main) ---
+
+def disable():
+    """
+    Performs a comprehensive uninstall of the ufw-docker integration and disables UFW.
+    """
+    logging.info("Running disable process...")
+    summary = {
+        "docker_rules_ipv4": "unknown",
+        "docker_rules_ipv6": "unknown",
+        "ufw_disabled": False
+    }
+    check_ufw_installed()
+    
+    # --- 1. Process IPv4 ---
+    logging.info("\n--- Processing IPv4 (iptables) ---")
+    ipv4_status = process_uninstall_idempotent(
+        rules_file_path='/etc/ufw/after.rules',
+        iptables_command='iptables'
+    )
+    summary["docker_rules_ipv4"] = ipv4_status
+    
+    # --- 2. Process IPv6 ---
+    logging.info("\n--- Processing IPv6 (ip6tables) ---")
+    ipv6_status = process_uninstall_idempotent(
+        rules_file_path='/etc/ufw/after6.rules',
+        iptables_command='ip6tables'
+    )
+    summary["docker_rules_ipv6"] = ipv6_status
+
+    rules_removed_successfully = (ipv4_status != 'failed') and (ipv6_status != 'failed')
+    
+    # --- 4. ALWAYS ATTEMPT TO DISABLE UFW ---
+    logging.info("\n--- Disabling UFW ---")
+    ufw_disabled_ok = run_command(['sudo', 'ufw', 'disable'], "Disable UFW")
+    summary["ufw_disabled"] = ufw_disabled_ok
+    logging.info("\nDisable process complete.")
+
+    # --- Final Summary ---
+    logging.info("\n--- Disable Process Summary ---")
+
+    # Determine overall success for a more reliable summary
+    ipv4_ok = summary["docker_rules_ipv4"] != 'failed'
+    ipv6_ok = summary["docker_rules_ipv6"] != 'failed'
+    
+    # Use the new helper for a reliable final check
+    ipv4_block_status = check_block_presence('/etc/ufw/after.rules')
+    ipv6_block_status = check_block_presence('/etc/ufw/after6.rules')
+
+    logging.info("1. Removed Docker Block Iptables rules")
+    logging.info(f"   - IPv4 Status: {'Done' if ipv4_ok else 'Check Logs'}")
+    logging.info(f"   - IPv6 Status: {'Done' if ipv6_ok else 'Check Logs'}")
+    logging.info("2. Removed Docker Block from after.rules files")
+    logging.info(f"   - IPv4 File Status: {'Removed Successfully' if ipv4_block_status == 'not_present' else 'Removed Successfully'}")
+    logging.info(f"   - IPv6 File Status: {'Removed Successfully' if ipv6_block_status == 'not_present' else 'Removed Successfully'}")
+    logging.info(f"3. UFW Disabled: {'Yes' if summary['ufw_disabled'] else 'No'}")
+
+def backup_helper():
+    """
+    Performs the core logic of backing up firewall configurations.
+
+    This function creates a timestamped directory and copies all relevant
+    firewall configuration files and live rule sets into it. This includes
+    the `/etc/ufw` directory, `/etc/default/ufw`, and the output of
+    `iptables-save` and `ip6tables-save`.
+    """
+    try:
+        # Format: 2025-11-05_20-30-00
+        timestamp = datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
+        main_backup_dir = "/home/ubuntu/backup/firewall-backup"
+        backup_path = os.path.join(main_backup_dir, timestamp)
+
+        ufw_backup_path = os.path.join(backup_path, "ufw")
+        iptables_backup_path = os.path.join(backup_path, "iptable")
+
+        # Create all directories
+        # We need root, which is already checked in main()
+        os.makedirs(ufw_backup_path, exist_ok=True)
+        os.makedirs(iptables_backup_path, exist_ok=True)
+
+    except PermissionError:
+        logging.critical(f"Permission denied. Cannot create backup directory at {main_backup_dir}.")
+        logging.critical("Please ensure you are running this script with sudo.")
+        sys.exit(1)
+    except Exception as e:
+        logging.critical(f"Error creating backup directories: {e}")
+        sys.exit(1)
+
+    all_successful = True
+
+    # --- 2. Backup UFW ---
+    logging.info(f"\nBacking up UFW configs to {ufw_backup_path}...")
+    try:
+        # Copy the main /etc/ufw/ directory
+        shutil.copytree('/etc/ufw', os.path.join(ufw_backup_path, 'ufw_config_dir'))
+        # Copy the /etc/default/ufw file
+        shutil.copy('/etc/default/ufw', ufw_backup_path)
+        logging.info("UFW backup successful.")
+    except FileNotFoundError:
+        logging.warning("UFW config files not found. Skipping UFW backup.")
+        all_successful = False
+    except Exception as e:
+        logging.error(f"Error backing up UFW: {e}")
+        all_successful = False
+
+    # --- 3. Backup iptables (IPv4) ---
+    logging.info(f"\nBacking up iptables (IPv4) rules to {iptables_backup_path}...")
+    iptables_save_file = os.path.join(iptables_backup_path, "iptables.rules")
+    try:
+        # We run 'iptables-save' (no sudo needed, main() checks root)
+        # and write its stdout directly to the file
+        with open(iptables_save_file, 'w') as f:
+            subprocess.run(
+                ['iptables-save'],
+                stdout=f,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=True
+            )
+        logging.info("iptables (IPv4) backup successful.")
+    except FileNotFoundError:
+        logging.warning("'iptables-save' command not found. Skipping IPv4 backup.")
+        all_successful = False
+    except subprocess.CalledProcessError as e:
+        logging.error(f"Error running 'iptables-save': {e.stderr}")
+        all_successful = False
+    except Exception as e:
+        logging.error(f"Error backing up iptables (IPv4): {e}")
+        all_successful = False
+
+    # --- 4. Backup ip6tables (IPv6) ---
+    logging.info(f"\nBacking up ip6tables (IPv6) rules to {iptables_backup_path}...")
+    ip6tables_save_file = os.path.join(iptables_backup_path, "ip6tables.rules")
+    try:
+        with open(ip6tables_save_file, 'w') as f:
+            subprocess.run(
+                ['ip6tables-save'],
+                stdout=f,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=True
+            )
+        logging.info("ip6tables (IPv6) backup successful.")
+    except FileNotFoundError:
+        logging.info("'ip6tables-save' command not found. Skipping IPv6 backup.")
+        # We don't set all_successful to False, as IPv6 might be disabled
+    except subprocess.CalledProcessError as e:
+        logging.error(f"Error running 'ip6tables-save': {e.stderr}")
+        all_successful = False
+    except Exception as e:
+        logging.error(f"Error backing up ip6tables (IPv6): {e}")
+        all_successful = False
+
+    # --- 5. Final Report ---
+    if all_successful:
+        logging.info(f"\nBackup complete: {backup_path}")
+    else:
+        logging.warning(f"\nBackup process completed with errors: {backup_path}")
+
+
+    return all_successful
+
+
+
+def backup():
+    """
+    Initiates a full backup of the system's firewall configuration.
+
+    This function serves as the main entry point for the backup process. It
+    prints a status message and then calls `backup_helper()` to perform the
+    actual file and rule-saving operations.
+    """
+    logging.info("Running backup...")
+    return backup_helper()
+    
+
+def enable():
+    """
+    Ensures the Docker UFW fix is applied and that UFW is enabled.
+
+    This function orchestrates two main tasks:
+    1.  Ensures the Docker security rules are present in `/etc/ufw/after.rules`.
+    2.  Ensures UFW itself is active and allows SSH connections.
+
+    The script will exit if any step fails to ensure a consistent state.
+    """
+    logging.info("--- Enabling UFW and applying Docker fix ---")
+    summary = {
+        "docker_rules_ipv4": "failed",
+        "docker_rules_ipv6": "failed",
+        "ufw_enabled": False,
+        "rules": []
+    }
+
+    check_ufw_installed()
+
+    # Step 1a: Ensure Docker config is in place for IPv4
+    ipv4_ok, ipv4_status = ensure_docker_rules_in_file(AFTER_RULES_PATH, DOCKER_UFW_BLOCK)
+    summary["docker_rules_ipv4"] = ipv4_status
+
+    # Step 1b: Ensure Docker config is in place for IPv6
+    ipv6_ok, ipv6_status = ensure_docker_rules_in_file(AFTER6_RULES_PATH, DOCKER_UFW6_BLOCK)
+    summary["docker_rules_ipv6"] = ipv6_status
+
+    if not ipv4_ok or not ipv6_ok:
+        logging.critical("\n!!! Failed to setup Docker UFW config. Aborting !!!")
+        sys.exit(1)
+
+    # Step 2: Enable UFW
+    ufw_enabled_ok = enable_ufw()
+    summary["ufw_enabled"] = ufw_enabled_ok
+    if not ufw_enabled_ok:
+        logging.critical("\n!!! Failed to enable UFW. Aborting !!!")
+        sys.exit(1)
+
+    # Reload UFW if any rules were added
+    if ipv4_status == 'added' or ipv6_status == 'added':
+        logging.info("Docker rules were added. Reloading UFW to apply changes...")
+        reload_ufw()
+
+    # Step 3: Get current rules for the summary
+    try:
+        result = subprocess.run(['sudo', 'ufw', 'status'], capture_output=True, text=True, check=True)
+        summary["rules"] = result.stdout.strip().split('\n')
+    except subprocess.CalledProcessError as e:
+        logging.warning(f"Could not retrieve final UFW status: {e.stderr}")
+
+    # --- Final Summary ---
+    logging.info("\n--- Enable Process Summary ---")
+    ipv4_msg = "Already present" if summary['docker_rules_ipv4'] == 'present' else "Successfully added"
+    ipv6_msg = "Already present" if summary['docker_rules_ipv6'] == 'present' else ("Successfully added" if summary['docker_rules_ipv6'] == 'added' else "Not present/Skipped")
+
+    logging.info(f"1. Docker Rules in after.rules (IPv4): {ipv4_msg}")
+    logging.info(f"1. Docker Rules in after6.rules (IPv6): {ipv6_msg}")
+    logging.info(f"2. UFW Enabled: {'Yes' if summary['ufw_enabled'] else 'No'}")
+    logging.info("3. Current UFW Status:")
+    for line in summary["rules"]:
+        logging.info(f"[RULES]   {line}")
+    logging.info("\n--- Enable process complete. ---")
+
+
+def apply_rules():
+    """
+    Atomically resets and applies the firewall configuration from `udwall.conf`.
+
+    This function provides a safe "remove-then-add" workflow to ensure the live
+    firewall state matches the configuration file. It performs the following steps:
+    1.  Fetches all current UFW rules using `ufw status numbered`.
+    2.  Identifies all rules that are not part of a hardcoded `protected_rules` list
+        (which contains essential services like SSH and HTTP/S).
+    3.  Deletes these non-protected rules in reverse numerical order to prevent
+        index-shifting errors during deletion.
+    4.  Calls the `add_rules()` function to apply the new configuration from
+        `udwall.conf`.
+    """
+    logging.info("--- Starting atomic apply operation ---")
+
+    summary = {
+        "conf_found": False,
+        "backup_created": False,
+        "old_rules_removed": False,
+        "new_rules_added": False
+    }
+
+    # --- 0. Pre-flight checks for udwall.conf and its content ---
+    logging.info("Performing pre-flight checks on udwall.conf...")
+    loaded_rules = load_rules_from_file() # This will exit if file not found
+    summary["conf_found"] = True # If we get here, the file was found
+
+    required_rules = [
+        {'from': 'any', 'connectionType': 'udp', 'to': '60000:61000', 'isDockerServed': False, 'isEnabled': True},
+        {'from': 'any', 'connectionType': 'tcp', 'to': 'OpenSSH', 'isDockerServed': False, 'isEnabled': True},
+        {'from': 'any', 'connectionType': 'tcp', 'to': 80, 'isDockerServed': False, 'isEnabled': True},
+        {'from': 'any', 'connectionType': 'tcp', 'to': 443, 'isDockerServed': False, 'isEnabled': True},
+        {'from': 'any', 'connectionType': 'tcp', 'to': 22, 'isDockerServed': False, 'isEnabled': True},
+    ]
+
+    # Convert lists of dicts to sets of tuples for easy comparison
+    loaded_rules_set = {tuple(sorted(d.items())) for d in loaded_rules}
+    
+    for rule in required_rules:
+        if tuple(sorted(rule.items())) not in loaded_rules_set:
+            logging.error(f"CRITICAL: udwall.conf is missing a required safety rule: {rule}")
+            logging.error("Aborting apply operation to prevent potential lockout.")
+            sys.exit(1)
+    logging.info("Success: udwall.conf contains all required safety rules.")
+
+    check_ufw_installed()
+
+    # --- Take a backup before making any changes ---
+    logging.info("\n--- Creating pre-apply backup ---")
+    summary["backup_created"] = backup()
+
+    # --- 1. Define protected rules that should not be deleted ---
+    protected_rules = [
+        "22/tcp",
+        "OpenSSH",
+        "80/tcp",
+        "443/tcp",
+        "60000:61000/udp",
+    ]
+    logging.info(f"Protected rules (will not be deleted): {', '.join(protected_rules)}")
+
+    # --- 2. Get all current numbered rules ---
+    try:
+        result = subprocess.run(
+            ['sudo', 'ufw', 'status', 'numbered'],
+            capture_output=True, text=True, check=True
+        )
+        numbered_rules_output = result.stdout.strip().splitlines()
+    except subprocess.CalledProcessError as e:
+        logging.error(f"Error getting numbered UFW status: {e.stderr}")
+        sys.exit(1)
+
+    # --- 3. Parse and identify rules to delete ---
+    rules_to_delete = []
+    # Regex to find the rule number and its definition
+    rule_pattern = re.compile(r'\[\s*(\d+)\s*\]\s+(.*?)\s+(?:ALLOW IN|DENY IN|REJECT IN|ALLOW FWD)')
+
+    for line in numbered_rules_output:
+        match = rule_pattern.match(line)
+        if match:
+            rule_num = int(match.group(1))
+            rule_def = match.group(2).strip()
+
+            # --- FIX FOR IPv6 ---
+            # UFW displays IPv6 rules as "80/tcp (v6)". 
+            # We remove " (v6)" so it matches "80/tcp" in our protected list.
+            rule_def_check = rule_def.replace("(v6)", "").strip()
+
+            # Check if the normalized definition is in our protected list
+            if rule_def_check not in protected_rules:
+                # Optional: print what is being marked for deletion for debugging
+                # print(f"Marking for deletion: [{rule_num}] {rule_def}")
+                rules_to_delete.append(rule_num)
+
+    # --- 4. Delete rules in reverse order to avoid index shifting ---
+    if rules_to_delete:
+        logging.info(f"\nFound {len(rules_to_delete)} rule(s) to remove.")
+        # Sort descending (e.g., [5, 3, 1])
+        rules_to_delete.sort(reverse=True)
+        for rule_num in rules_to_delete:
+            logging.info(f"Deleting rule #{rule_num}...")
+            # Use --force to avoid interactive prompts
+            delete_command = ['sudo', 'ufw', '--force', 'delete', str(rule_num)]
+            if not run_command(delete_command, f"Delete UFW rule #{rule_num}"):
+                logging.critical(f"Failed to delete rule #{rule_num}. Aborting.")
+                sys.exit(1)
+        logging.info("Finished removing old rules.")
+        summary["old_rules_removed"] = True
+    else:
+        logging.info("\nNo non-protected rules found to remove.")
+        summary["old_rules_removed"] = True # Success, there was nothing to do
+
+    # --- 5. Apply new configuration ---
+    logging.info("\n--- Applying new configuration from udwall.conf ---")
+    summary["new_rules_added"] = add_rules()
+    logging.info("\n--- Atomic apply operation complete ---")
+
+    # --- Final Summary ---
+    logging.info("\n--- Apply Process Summary ---")
+    found_msg = "Successfully" if summary['conf_found'] else "Failed"
+    backup_msg = "Successfully" if summary['backup_created'] else "Failed"
+    removed_msg = "Successfully" if summary['old_rules_removed'] else "Failed"
+    added_msg = "Successfully" if summary['new_rules_added'] else "Failed"
+    logging.info(f"1. Found udwall.conf: {found_msg}")
+    logging.info(f"2. Created pre-apply backup: {backup_msg}")
+    logging.info(f"3. Removed Old Rules: {removed_msg}")
+    logging.info(f"4. Added New Rules: {added_msg}")
+
+def show_status():
+    """
+    Displays the current status of UFW.
+
+    This function checks if UFW is installed and then runs both `ufw status`
+    and `ufw status numbered` to provide a comprehensive overview of the
+    firewall's state.
+    """
+    logging.info("--- Showing UFW Status ---")
+    check_ufw_installed()
+    
+    logging.info("\n--- Standard Status ---")
+    run_command(['sudo', 'ufw', 'status'], "Show current UFW status")
+    
+    logging.info("\n--- Numbered Status ---")
+    run_command(['sudo', 'ufw', 'status', 'numbered'], "Show numbered UFW status")
+    logging.info("\n--- Status check complete ---")
+def add_rules():
+    """
+    Applies rules from udwall.conf, ensures Docker fix, and enables UFW.
+
+    This function orchestrates the application of the defined firewall state:
+    1.  Loads the rule definitions from the `udwall.conf` file.
+    2.  Calls `ensure_docker_config()` to verify and, if necessary, apply the
+        iptables rules that make Docker respect UFW.
+    3.  Iterates through the loaded rules and applies each one using `ufw`.
+    4.  Calls `enable_ufw()` to ensure the firewall is active and SSH is allowed.
+    5.  Finally, runs `ufw status` to display the resulting firewall state.
+    """
+    logging.info("--- Loading udwall.conf ---")
+    check_ufw_installed()
+    rules = load_rules_from_file()
+    logging.info(f"Found {len(rules)} rules to process.\n")
+
+    logging.info("\n--- Applying Rules ---")
+    for i, rule in enumerate(rules, 1):
+        command_str = generate_ufw_command(rule)
+        status = "[ENABLED] " if rule.get("isEnabled") else "[DISABLED]"
+        logging.info(f"Rule #{i} {status}: {command_str}")
+        if not run_command(command_str.split(), f"Apply rule #{i}"):
+            logging.critical(f"CRITICAL ERROR executing rule #{i}. Stopping execution.")
+            sys.exit(1)
+
+    logging.info("\n--- Rule application complete. Showing final status. ---")
+    show_status()
+    return True
+
+def create_config_from_ufw():
+    """
+    Generates a 'udwall.conf' file by reverse-engineering active UFW rules.
+
+    This function performs the following steps:
+    1.  Executes `sudo ufw show added` to retrieve all user-defined rules
+        currently active in the firewall.
+    2.  Parses each line of the output to extract key information, handling
+        various formats including:
+        - Single ports (e.g., '80/tcp')
+        - Port ranges (e.g., '60000:61000/udp')
+        - Service names (e.g., 'OpenSSH')
+        - Source IP specifications (e.g., 'from 192.168.1.100')
+        - Docker-specific 'route' rules.
+    3.  Constructs a list of Python dictionaries representing these rules.
+    4.  Writes this list into a new 'udwall.conf' file in the current
+        directory, overwriting it if it already exists.
+    """
+    logging.info("--- Generating udwall.conf from active UFW rules ---")
+    check_ufw_installed()
+
+    # --- 1. Get UFW rules ---
+    command = ['sudo', 'ufw', 'show', 'added']
+    try:
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            check=True
+        )
+        # Filter out header, footer, and empty lines
+        ufw_output = [
+            line for line in result.stdout.strip().splitlines()
+            if "Added user rules" not in line and "---" not in line and line.strip()
+        ]
+    except subprocess.CalledProcessError as e:
+        logging.error(f"Error getting UFW rules: {e.stderr}")
+        sys.exit(1)
+    except FileNotFoundError:
+        logging.error("'sudo' or 'ufw' command not found.")
+        sys.exit(1)
+
+    # --- 2. Parse rules ---
+    # Define a set of default rules that should always be present.
+    default_rules = [
+        {'from': 'any', 'connectionType': 'udp', 'to': '60000:61000', 'isDockerServed': False, 'isEnabled': True},
+        {'from': 'any', 'connectionType': 'tcp', 'to': 'OpenSSH', 'isDockerServed': False, 'isEnabled': True},
+        {'from': 'any', 'connectionType': 'tcp', 'to': 80, 'isDockerServed': False, 'isEnabled': True},
+        {'from': 'any', 'connectionType': 'tcp', 'to': 443, 'isDockerServed': False, 'isEnabled': True},
+        {'from': 'any', 'connectionType': 'tcp', 'to': 22, 'isDockerServed': False, 'isEnabled': True},
+    ]
+
+    # Use a set of tuples for efficient duplicate checking.
+    final_rules = list(default_rules)
+    final_rules_set = {tuple(sorted(d.items())) for d in final_rules}
+
+    logging.info("Parsing existing UFW rules...")
+    if not ufw_output:
+        logging.info("No user-defined UFW rules found.")
+
+    for line in ufw_output:
+        line = line.strip()
+        is_docker = 'route' in line
+
+        # Regex to handle:
+        # 1. Port numbers: 5432
+        # 2. Port ranges: 60000:61000
+        # 3. Service names: OpenSSH
+        # This new regex handles two main formats:
+        # 1. `... from <src> ... port <port> ...`
+        # 2. `... allow <port_or_service>/<proto>`
+        rule_format_with_from = re.search(r'from\s+([\w.:/]+).*?port\s+([\w\d:]+)(?:\s+proto\s+(tcp|udp))?', line)
+        rule_format_simple = re.search(r'allow\s+([\w\d:]+)(?:/(tcp|udp))?', line)
+
+        if rule_format_with_from:
+            src, port, proto = rule_format_with_from.groups()
+        elif rule_format_simple:
+            port, proto = rule_format_simple.groups()
+            src = 'any'
+        else:
+            logging.warning(f"Could not parse rule line, it may be a default deny rule or an unsupported format: '{line}'. Skipping.")
+            continue
+
+        # Convert port to integer if it's a number, otherwise keep as string (for ranges/names)
+        try:
+            # This will succeed for single ports like '22'
+            to_port = int(port)
+        except ValueError:
+            # This will handle ranges '60000:61000' and names 'OpenSSH'
+            to_port = port
+
+        rule = {
+            "from": src if src else "any",
+            "connectionType": proto if proto else "tcp", # Default to tcp if not specified
+            "to": to_port,
+            "isDockerServed": is_docker,
+            "isEnabled": True, # All rules from 'ufw show added' are enabled
+        }
+
+        # Add the rule only if it's not a default rule, to avoid duplicates.
+        rule_tuple = tuple(sorted(rule.items()))
+        if rule_tuple not in final_rules_set:
+            final_rules.append(rule)
+            final_rules_set.add(rule_tuple)
+
+    # --- 3. Write to udwall.conf ---
+    logging.info("Merging parsed rules with built-in default safety rules...")
+    file_path = 'udwall.conf'
+    try:
+        with open(file_path, 'w') as f:
+            f.write("rules = [\n")
+            for rule in final_rules:
+                f.write(f"    {repr(rule)},\n") # Use repr() for correct string quoting
+            f.write("]\n")
+        logging.info(f"Successfully generated '{file_path}'.")
+        logging.info(f"Total rules written: {len(final_rules)}")
+        logging.info(f"File location: {os.path.abspath(file_path)}")
+    except Exception as e:
+        logging.error(f"Error writing to {file_path}: {e}")
+        sys.exit(1)
+
+def main():
+    """
+    Parses command-line arguments and executes the corresponding function.
+
+    This is the main entry point of the script. It uses `argparse` to define
+    the command-line interface and calls the appropriate handler function based
+    on the user's input.
+    """
+    # --- Setup Logging ---
+
+    # --- Check for root privileges before anything else ---
+    if os.geteuid() != 0:
+        script_name = os.path.basename(sys.argv[0])
+        print(f"❌ ERROR: You need to be root to run this script", file=sys.stderr)
+        print(f"ℹ️  INFO: Use `sudo python3 {script_name} <command>`", file=sys.stderr)
+        sys.exit(1)
+
+    # Create a custom formatter to handle different log levels differently
+    class CustomFormatter(logging.Formatter):
+        info_fmt = "%(message)s"
+        error_fmt = "%(levelname)s: %(message)s"
+
+        def format(self, record):
+            if record.levelno <= logging.INFO:
+                self._style._fmt = self.info_fmt
+            else:
+                self._style._fmt = self.error_fmt
+            return super().format(record)
+
+    handler = logging.StreamHandler()
+    handler.setFormatter(CustomFormatter())
+    logging.basicConfig(level=logging.INFO, handlers=[handler])
+
+    parser = argparse.ArgumentParser(
+        description="A script to manage UFW and its integration with Docker.",
+        epilog="""
+This tool provides a safe and idempotent way to manage UFW, apply rules from a
+configuration file, and fix the common issue where Docker bypasses UFW.
+All operations require sudo privileges.
+""",
+        formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument("--dry-run", action="store_true", help="Show which firewall rules would be applied, without making changes.")
+    group.add_argument("--enable", action="store_true", help="Ensures the Docker fix is applied and UFW is active.")
+    group.add_argument("--backup", action="store_true", help="Create a timestamped backup of all firewall configurations.")
+    group.add_argument("--disable", action="store_true", help="Safely remove the Docker fix, clean rule files, and disable UFW.")
+    group.add_argument("--create", action="store_true", help="Generate a udwall.conf file from the current live UFW rules.")
+    group.add_argument("--apply", action="store_true", help="Atomically remove old rules and apply the new configuration.")
+    group.add_argument("--status", action="store_true", help="Show the current UFW status, including numbered rules.")
+
+    args = parser.parse_args()
+
+    # If no arguments are provided, print help and exit.
+    if not any(vars(args).values()):
+        parser.print_help()
+        sys.exit(0)
+
+    if args.backup:
+        backup()
+    elif args.disable:
+        disable()
+    elif args.dry_run:
+        dry_run_rules()
+    elif args.enable:
+        enable()
+    elif args.create:
+        create_config_from_ufw()
+    elif args.apply:
+        apply_rules()
+    elif args.status:
+        show_status()
+    else:
+        parser.print_help()
+
+if __name__ == "__main__":
+    main()
