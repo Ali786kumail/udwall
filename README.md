@@ -1,4 +1,4 @@
-# `udwall`: UFW + Docker Firewall Manager
+# `udwall`: Make UFW docker-compatible with a single command
 
 `udwall` is a declarative tool to manage UFW and Docker firewall rules using a single Python configuration file. It fixes the Docker security flaw where containers bypass UFW, and it automates rule management so you never have to run manual `ufw allow` commands again.
 
@@ -22,23 +22,27 @@ The issue is detailed as follows (Source: [ufw-docker/problem](https://github.co
     *   [my.oschina.net](https://my.oschina.net/abcfy2/blog/539485)
     *   [v2ex.com](https://www.v2ex.com/amp/t/466666)
     *   [blog.36web.rocks](https://blog.36web.rocks/2016/07/08/docker-behind-ufw.html)
+    *   ..
 
-## The Previous Solution: ufw-docker
+## The Previous Solution
 
 The tool `ufw-docker` solved these issues but had a few drawbacks:
+
+### How ufw-docker solved the issues
+
+1.  It fixed the Docker security flaw where containers bypass UFW.
+2.  **Prerequisites:** It required downloading a script to `/usr/local/bin` and running it with sudo.
+3.  **Mechanism:** It modified the `/etc/ufw/after.rules` file to add a custom `DOCKER-USER` chain that correctly filters traffic destined for Docker containers, ensuring UFW rules are respected. (See [ufw-docker README](https://github.com/chaifeng/ufw-docker/blob/master/README.md#how-to-do) for more details).
+
+### Drawbacks
 
 1.  **Manual Steps:** It required a lot of manual steps to manage rules for each container.
 2.  **Persistence Issues:** Whenever UFW was disabled, Docker ports were still blocked (or rules persisted unexpectedly).
 3.  **Difficult Uninstall:** To uninstall `ufw-docker`, you historically needed to remove iptables rules manually and restart the server ([source](https://github.com/chaifeng/ufw-docker/issues/89#issuecomment-1438289285)).
     > Note: Recently `ufw-docker` added an uninstall command to remove the configuration ([source](https://github.com/chaifeng/ufw-docker/commit/c45eff693f87a8a7f7a002c8b337abbf22480ca9)).
 
-### How ufw-docker solved the issues
 
-1.  It fixed the Docker security flaw where containers bypass UFW.
-2.  **Prerequisites:** It required downloading a script to `/usr/local/bin` and running it with sudo.
-3.  **Mechanism:** It modified the `/etc/ufw/after.rules` file to add a custom `DOCKER-USER` chain that correctly filters traffic destined for Docker containers, ensuring UFW rules are respected. (See [ufw-docker README](https://github.com/chaifeng/ufw-docker/blob/master/README.md#how-to-do) for details).
-
-## The Solution: udwall
+## What does udwall do?
 
 **udwall** is a declarative tool to manage UFW and Docker firewall rules using a single configuration file.
 
@@ -63,56 +67,100 @@ This script will:
 
 ## Usage
 
-**Note:** `udwall` requires `sudo` privileges.
+Currently `udwall` supports the following rule patterns:
 
-### Fix the Docker Flaw & Enable UFW
+1.  **Docker Forwarding (Any IP)**: Allow traffic to a Docker container from anywhere.
+    *   `ufw route allow from any to any port <PORT> proto tcp`
+2.  **Host Service (Any IP)**: Allow traffic to a service on the host (e.g., PostgreSQL) from anywhere.
+    *   `ufw allow <PORT>`
+3.  **Docker Forwarding (Specific IP)**: Allow traffic to a Docker container only from a specific IP.
+    *   `ufw route allow from <IP> to any port <PORT> proto tcp`
+4.  **Host Service (Specific IP)**: Allow traffic to a host service only from a specific IP.
+    *   `ufw allow from <IP> to any port <PORT> proto tcp`
+5.  **Rule Deletion**: Setting `isEnabled: false` will automatically generate the corresponding `delete` command for any of the above patterns.
+
+
+> **Note:** `udwall` requires `sudo` privileges.
+### Create a Configuration
+
+You can create a configuration file manually or use the `--create` command to generate one from your current live ufw rules.
+
+```bash
+sudo udwall --create
+```
+It will create a `udwall.conf` file in `/etc/udwall/udwall.conf`.
+
+### Create Backup
+
+You can create a backup of your current ufw rules with the `--backup` command.
+
+```bash
+sudo udwall --backup
+```
+
+It will create a backup of your current ufw rules in `/home/ubuntu/backup/firewall-backup/`.
+
+The backup folder contains both iptables and ufw rules.
+
+
+### Apply the Configuration
+
+This will backup your current state, remove undefined rules, and apply the new ones based on the configuration file only.
+
+```bash
+sudo udwall --apply
+```
+Backup will be created in `/home/ubuntu/backup/firewall-backup/`.
+
+### Enable Firewall
 
 This sets up the `iptables` rules required to make Docker respect UFW.
 
 ```bash
 sudo udwall --enable
 ```
+### Disable Firewall
 
-### Define your Rules
+This disables the `iptables` rules required to make Docker respect UFW.
 
-Edit the configuration file at `/etc/udwall/udwall.conf` (or `udwall.conf` in the current directory).
+```bash
+sudo udwall --disable
+```
+
+### Define Rules
+
+Edit the configuration file at `/etc/udwall/udwall.conf`.
 
 ```python
 # udwall.conf
 rules = [
-    # --- Host Rules ---
-    # Always allow SSH (udwall protects this automatically, but good to be explicit)
-    {'from': 'any', 'connectionType': 'tcp', 'to': '22', 'isDockerServed': False, 'isEnabled': True},
-    # Nginx on Host
-    {'from': 'any', 'connectionType': 'tcp', 'to': 80, 'isDockerServed': False, 'isEnabled': True},
+    # Allow SSH access from any source
+    {'from': 'any', 'connectionType': 'tcp', 'to': 'OpenSSH', 'isDockerServed': False, 'isEnabled': True},
 
-    # --- Docker Rules ---
-    # Container mapped to port 8080. 
-    # 'isDockerServed': True handles the routing logic automatically.
-    {'from': 'any', 'connectionType': 'tcp', 'to': 8080, 'isDockerServed': True, 'isEnabled': True},
-    
-    # Allow specific IP to access a database container
-    {'from': '1.2.3.4', 'connectionType': 'tcp', 'to': 5432, 'isDockerServed': True, 'isEnabled': True},
+    # Allow HTTP and HTTPS traffic to the host
+    {'from': 'any', 'connectionType': 'tcp', 'to': 80, 'isDockerServed': False, 'isEnabled': True},
+    {'from': 'any', 'connectionType': 'tcp', 'to': 443, 'isDockerServed': False, 'isEnabled': True},
+
+    # Allow traffic to a Docker container on port 8080 from a specific IP
+    {'from': '192.168.1.100', 'connectionType': 'tcp', 'to': 8080, 'isDockerServed': True, 'isEnabled': True},
+
+    # Allow a UDP port range for an application like Mosh
+    {'from': 'any', 'connectionType': 'udp', 'to': '60000:61000', 'isDockerServed': False, 'isEnabled': True},
 ]
 ```
-
-### Apply the Configuration
-
-This will backup your current state, remove undefined rules, and apply the new ones.
-
-```bash
-sudo udwall --apply
-```
-
-### Other Commands
+### Commands
 
 | Command | Description |
 | :--- | :--- |
-| `sudo udwall --dry-run` | Shows what rules would be applied without making changes. |
-| `sudo udwall --create` | Generates a `udwall.conf` at `/etc/udwall/udwall.conf` from your current live rules. |
-| `sudo udwall --backup` | Creates a timestamped backup in `/home/ubuntu/backup/`. |
-| `sudo udwall --status` | Shows the current UFW status. |
-| `sudo udwall --disable` | Removes Docker rules, cleans files, and disables UFW. |
+| `sudo udwall --enable` | **Initialize**: Sets up the Docker-UFW integration and enables UFW. Run this first. |
+| `sudo udwall --apply` | **Apply Rules**: Reads `udwall.conf`, backs up current state, and applies the new firewall rules. |
+| `sudo udwall --dry-run` | **Preview**: Shows exactly which `ufw` commands would be run, without making any changes. |
+| `sudo udwall --create` | **Import**: Generates a `udwall.conf` file at `/etc/udwall/udwall.conf` based on your *current* active UFW rules. |
+| `sudo udwall --backup` | **Backup**: Manually creates a timestamped backup of `/etc/ufw` and `iptables` rules in `/home/ubuntu/backup/`. |
+| `sudo udwall --status` | **Check Status**: Displays the current UFW status and active rules (numbered). |
+| `sudo udwall --disable` | **Uninstall**: Removes the Docker-UFW integration, deletes custom chains, and disables UFW. |
+| `sudo udwall --version` | **Version**: Displays the installed version of `udwall`. |
+| `sudo udwall --help` | **Help**: Shows the help message and available options. |
 
 ## 🛡️ Credits
 
