@@ -53,7 +53,7 @@ The tool `ufw-docker` solved these issues but had a few drawbacks:
 You can install `udwall` with a single command:
 
 ```bash
-curl -s https://raw.githubusercontent.com/Hexmos/udwall/main/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/HexmosTech/udwall/main/install.sh | sudo bash
 ```
 
 This script will:

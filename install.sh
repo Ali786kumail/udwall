@@ -4,7 +4,7 @@
 
 set -e
 
-REPO_URL="https://raw.githubusercontent.com/Hexmos/udwall/main"
+REPO_URL="https://raw.githubusercontent.com/HexmosTech/udwall/main"
 INSTALL_PATH="/usr/local/bin/udwall"
 CONFIG_DIR="/etc/udwall"
 CONFIG_FILE="$CONFIG_DIR/udwall.conf"
