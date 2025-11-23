@@ -82,34 +82,31 @@ Currently `udwall` supports the following rule patterns:
 > **Note:** `udwall` requires `sudo` privileges.
 ### Create a Configuration
 
-You can create a configuration file manually or use the `--create` command to generate one from your current live ufw rules.
+You can create a configuration file manually or use the `--create` command to generate one from your current live UFW rules.
 
 ```bash
 sudo udwall --create
 ```
-It will create a `udwall.conf` file in `/etc/udwall/udwall.conf`.
+This creates a `udwall.conf` file in `/etc/udwall/udwall.conf`.
 
 ### Create Backup
 
-You can create a backup of your current ufw rules with the `--backup` command.
+You can create a backup of your current UFW rules with the `--backup` command.
 
 ```bash
 sudo udwall --backup
 ```
 
-It will create a backup of your current ufw rules in `/home/ubuntu/backup/firewall-backup/`.
-
-The backup folder contains both iptables and ufw rules.
-
+This creates a timestamped backup in `/home/ubuntu/backup/firewall-backup/`, containing both iptables and UFW rules.
 
 ### Apply the Configuration
 
-This will backup your current state, remove undefined rules, and apply the new ones based on the configuration file only.
+This will back up your current state, remove undefined rules, and apply the new ones based on the configuration file.
 
 ```bash
 sudo udwall --apply
 ```
-Backup will be created in `/home/ubuntu/backup/firewall-backup/`.
+Backups are stored in `/home/ubuntu/backup/firewall-backup/`.
 
 ### Enable Firewall
 
@@ -120,7 +117,7 @@ sudo udwall --enable
 ```
 ### Disable Firewall
 
-This disables the `iptables` rules required to make Docker respect UFW.
+This removes the `iptables` rules and custom chains, effectively disabling the Docker-UFW integration.
 
 ```bash
 sudo udwall --disable
