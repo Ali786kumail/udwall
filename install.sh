@@ -11,36 +11,59 @@ fi
 
 echo "🚀 Installing udwall..."
 
-# 1. Install dependencies
-echo "📦 Installing dependencies..."
-apt-get update -qq
-apt-get install -y ufw python3
+# 1. Check dependencies
+echo "🔍 Checking dependencies..."
 
-# 2. Create installation directory
-INSTALL_DIR="/opt/udwall"
-echo "📂 Creating installation directory: $INSTALL_DIR"
-mkdir -p "$INSTALL_DIR"
+if ! command -v python3 &> /dev/null; then
+    echo "❌ Error: Python 3 is not installed."
+    echo "ℹ️  Please install Python 3 and try again (e.g., 'sudo apt install python3')."
+    exit 1
+fi
 
-# 3. Copy files
-echo "COPY Copying files..."
-cp udwall.py "$INSTALL_DIR/"
-cp udwall.conf "$INSTALL_DIR/udwall.conf.example"
+if ! command -v ufw &> /dev/null; then
+    echo "❌ Error: UFW is not installed."
+    echo "ℹ️  Please install UFW and try again (e.g., 'sudo apt install ufw')."
+    exit 1
+fi
 
-# 4. Create symlink
-echo "🔗 Creating symlink..."
-ln -sf "$INSTALL_DIR/udwall.py" /usr/local/bin/udwall
+echo "✅ Dependencies found."
 
-# 5. Make executable
-chmod +x "$INSTALL_DIR/udwall.py"
+# 2. Download and Install
+echo "⬇️  Downloading udwall..."
 
-# 6. Setup global config
+# Ensure curl is installed
+if ! command -v curl &> /dev/null; then
+    echo "❌ Error: curl is not installed."
+    echo "ℹ️  Please install curl and try again."
+    exit 1
+fi
+
+REPO_URL="https://raw.githubusercontent.com/Hexmos/udwall/main"
+INSTALL_PATH="/usr/local/bin/udwall"
+
+# Download udwall.py directly to /usr/local/bin/udwall
+curl -sSL "$REPO_URL/udwall.py" -o "$INSTALL_PATH"
+
+if [ $? -ne 0 ]; then
+    echo "❌ Error downloading udwall.py"
+    exit 1
+fi
+
+# Make executable
+echo "🔑 Setting permissions..."
+chmod +x "$INSTALL_PATH"
+
+# 3. Setup global config
 CONFIG_DIR="/etc/udwall"
-if [ ! -f "$CONFIG_DIR/udwall.conf" ]; then
-    echo "⚙️  Setting up default configuration at $CONFIG_DIR/udwall.conf"
+CONFIG_FILE="$CONFIG_DIR/udwall.conf"
+
+if [ ! -f "$CONFIG_FILE" ]; then
+    echo "⚙️  Setting up default configuration at $CONFIG_FILE"
     mkdir -p "$CONFIG_DIR"
-    cp udwall.conf "$CONFIG_DIR/udwall.conf"
+    # Download default config
+    curl -sSL "$REPO_URL/udwall.conf" -o "$CONFIG_FILE"
 else
-    echo "⚠️  Configuration file already exists at $CONFIG_DIR/udwall.conf. Skipping overwrite."
+    echo "⚠️  Configuration file already exists at $CONFIG_FILE. Skipping overwrite."
 fi
 
 echo "✅ Installation complete!"
