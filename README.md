@@ -59,6 +59,12 @@ You can install `udwall` with a single command:
 curl -fsSL https://raw.githubusercontent.com/HexmosTech/udwall/main/install.sh | sudo bash
 ```
 
+To install a specific version (e.g., `v0.0.2`), run:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/HexmosTech/udwall/main/install.sh | sudo bash -s -- --v0.0.2
+```
+
 This script will:
 - Check for dependencies (`python3`, `ufw`, `curl`).
 - Download `udwall` to `/usr/local/bin/udwall`.

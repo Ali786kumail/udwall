@@ -4,7 +4,13 @@
 
 set -e
 
-REPO_URL="https://raw.githubusercontent.com/HexmosTech/udwall/main"
+# Parse version argument (e.g., --v0.0.2)
+VERSION="main"
+if [ $# -gt 0 ] && [[ "$1" == --v* ]]; then
+    VERSION="${1#--}"  # Remove leading --
+fi
+
+REPO_URL="https://raw.githubusercontent.com/HexmosTech/udwall/$VERSION"
 INSTALL_PATH="/usr/local/bin/udwall"
 CONFIG_DIR="/etc/udwall"
 CONFIG_FILE="$CONFIG_DIR/udwall.conf"

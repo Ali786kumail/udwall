@@ -22,5 +22,6 @@ jobs:
           files: |
             udwall
             udwall.conf
+            udwall.conf.example
             install.sh
           generate_release_notes: true

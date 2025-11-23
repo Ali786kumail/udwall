@@ -9,7 +9,7 @@ import shlex
 import re
 import logging
 
-__version__ = "0.0.3"
+__version__ = "0.0.4"
 
 AFTER_RULES_PATH = "/etc/ufw/after.rules"
 AFTER6_RULES_PATH = "/etc/ufw/after6.rules"
