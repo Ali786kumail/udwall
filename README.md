@@ -184,7 +184,7 @@ If you want to open port 4050 to any user, add this rule to `/etc/udwall/udwall.
 
 ```python
 rules = [
-    # Remaing Default rules
+    # Remaining Default rules
     # Allow access to Docker container on port 4050 from any IP
     {'from': 'any', 'connectionType': 'tcp', 'to': 4050, 'isDockerServed': True, 'isEnabled': True},
 ]
@@ -246,13 +246,13 @@ The core `iptables` logic to fix the Docker/UFW security flaw is based on the wo
 
 ## Related Projects
 
-**[LiveReview](https://hexmos.com/livereview)** - I'm building a private AI code review tool that runs on your LLM key (OpenAI, Geminietc.) designed for Organizations. Check it out, if that's your kind of thing.
+**[LiveReview](https://hexmos.com/livereview)** - I'm building a private AI code review tool that runs on your LLM key (OpenAI, Gemini, etc.) designed for Organizations. Check it out if that's your kind of thing.
 
 LiveReview helps you get great feedback on your PR/MR in a few minutes.
 
-Saves hours on every PR by giving fast, automated first-pass reviews. Helps both junior/senior engineers to go faster.
+Saves hours on every PR by giving fast, automated first-pass reviews. Helps both junior and senior engineers work faster.
 
-If you're tired of waiting for your peer to review your code or are not confident that they'll provide valid feedback, here's LiveReview for you.
+If you're tired of waiting for your peers to review your code or are not confident they'll provide valid feedback, LiveReview is here for you.
 
 ## ⭐ Star This Repository
 
