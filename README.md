@@ -182,7 +182,7 @@ The core `iptables` logic to fix the Docker/UFW security flaw is based on the wo
 
 ## Related Projects
 
-**[LiveReview](https://hexmos.com/livereview)** - I'm building a private AI code review tool that runs on your LLM key (OpenAI, Gemini, etc.) with flat, no-seat pricing — designed for small teams. Check it out, if that's your kind of thing.
+**[LiveReview](https://hexmos.com/livereview)** - I'm building a private AI code review tool that runs on your LLM key (OpenAI, Geminietc.) designed for Organizations. Check it out, if that's your kind of thing.
 
 LiveReview helps you get great feedback on your PR/MR in a few minutes.
 
