@@ -80,6 +80,14 @@ COMMIT
 # END UFW AND DOCKER
 """
 
+REQUIRED_RULES = [
+    {'from': 'any', 'connectionType': 'tcp', 'to': 22, 'isDockerServed': False, 'isEnabled': True},
+]
+
+PROTECTED_RULES = [
+    "22/tcp",
+]
+
 
 def run_command(command_list, description, ignore_errors_containing=None):
     """
