@@ -5,9 +5,16 @@
 set -e
 
 # Parse version argument (e.g., --v0.0.2)
-VERSION="main"
+# Parse version argument (e.g., --v0.0.2)
+VERSION=""
 if [ $# -gt 0 ] && [[ "$1" == --v* ]]; then
     VERSION="${1#--}"  # Remove leading --
+fi
+
+if [ -z "$VERSION" ]; then
+    echo "🔍 Checking for latest version..."
+    VERSION=$(curl -Ls -o /dev/null -w %{url_effective} https://github.com/HexmosTech/udwall/releases/latest | sed 's|.*/tag/||')
+    echo "✅ Latest version found: $VERSION"
 fi
 
 REPO_URL="https://raw.githubusercontent.com/HexmosTech/udwall/$VERSION"
