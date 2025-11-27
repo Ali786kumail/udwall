@@ -145,7 +145,7 @@ udwall has 5 config options:
 
 #### Example: Non Docker Port
 
-If you are running simple python server on port 4050, here's how to handle it with `udwall`.
+If you are running a simple python server on port 4050, here's how to handle it with `udwall`.
 
 ```python
 rules = [
@@ -195,7 +195,6 @@ rules = [
 ]
 ```
 
-
 #### Step 4: Apply the Configuration
 
 This will back up your current state, remove undefined rules, and apply the new ones based on the configuration file.
@@ -226,8 +225,8 @@ sudo udwall --disable
 
 Udwall has basic ssh port checks to ensure you don't accidentally disable your ssh port. If you want to bypass these checks, you can use the `--force` flag.
 
-This is not recommended but as this skips the ssh port checks (i.e., port `22/tcp`).
-This is for only for enabling and applying rules without ssh port checks.
+This is not recommended as it skips the ssh port checks (i.e., port `22/tcp`).
+This is only for enabling and applying rules without ssh port checks.
 
 #### Force Apply
 
@@ -239,7 +238,7 @@ sudo udwall --apply -f
 
 #### Force Enable
 
-This enable firewall without ssh port checks.
+This enables the firewall without ssh port checks.
 
 ```bash
 sudo udwall --enable -f
