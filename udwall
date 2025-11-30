@@ -11,7 +11,7 @@ import logging
 import pwd
 import json
 
-__version__ = "0.0.8"
+__version__ = "0.0.9"
 
 UDWALL_CONF_FILE = "udwall.conf"
 UDWALL_SYSTEM_CONF_PATH = "/etc/udwall/udwall.conf"
